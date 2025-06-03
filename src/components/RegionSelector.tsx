@@ -61,6 +61,7 @@ interface RegionSelectorProps {
 
 const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChange }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [regions, setRegions] = useState<Region[]>([]);
   const [activeRegion, setActiveRegion] = useState<Region | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<Region | null>(null);
@@ -70,15 +71,35 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
   const [drawType, setDrawType] = useState<'rectangle' | 'quadrilateral'>('rectangle');
   const [copiedRegion, setCopiedRegion] = useState<Region | null>(null);
   const history = useHistory();
+  const [scale, setScale] = useState(1);
+  const [originalSize, setOriginalSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
+    if (!imageUrl) return;
+
     const img = new Image();
     img.src = imageUrl;
     img.onload = () => {
-      if (canvasRef.current) {
-        const canvas = canvasRef.current;
-        canvas.width = img.width;
-        canvas.height = img.height;
+      if (canvasRef.current && containerRef.current) {
+        // Store original image dimensions
+        setOriginalSize({ width: img.width, height: img.height });
+
+        // Calculate scale to fit container while maintaining aspect ratio
+        const containerWidth = containerRef.current.clientWidth;
+        const containerHeight = containerRef.current.clientHeight;
+        const scaleX = containerWidth / img.width;
+        const scaleY = containerHeight / img.height;
+        const newScale = Math.min(scaleX, scaleY);
+        setScale(newScale);
+
+        // Set canvas dimensions to original image size
+        canvasRef.current.width = img.width;
+        canvasRef.current.height = img.height;
+
+        // Set display size
+        canvasRef.current.style.width = `${img.width * newScale}px`;
+        canvasRef.current.style.height = `${img.height * newScale}px`;
+
         redrawCanvas();
       }
     };
@@ -112,7 +133,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
 
   const redrawCanvas = () => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !imageUrl) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -123,7 +144,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
     // Draw image
     const img = new Image();
     img.src = imageUrl;
-    ctx.drawImage(img, 0, 0);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
     // Draw regions
     regions.forEach((region) => {
@@ -161,8 +182,8 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
 
     const rect = canvas.getBoundingClientRect();
     return {
-      x: (e.clientX - rect.left) * (canvas.width / rect.width),
-      y: (e.clientY - rect.top) * (canvas.height / rect.height)
+      x: (e.clientX - rect.left) / scale,
+      y: (e.clientY - rect.top) / scale
     };
   };
 
@@ -439,7 +460,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
         </div>
       </div>
 
-      <div className="relative">
+      <div className="relative" ref={containerRef} style={{ height: '400px' }}>
         <canvas
           ref={canvasRef}
           onMouseDown={handleMouseDown}
@@ -447,7 +468,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           className="border border-gray-300 dark:border-gray-600 rounded-lg cursor-crosshair"
-          style={{ width: '100%', height: 'auto' }}
+          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
         />
       </div>
 
@@ -485,3 +506,4 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
 };
 
 export default RegionSelector;
+

@@ -122,7 +122,7 @@ async function loadModels(): Promise<boolean> {
 
       objectDetector = detector;
       featureExtractor = extractor;
-      
+
       clearTimeout(timeoutId);
       isModelLoading = false;
       resolve();
@@ -243,11 +243,11 @@ function calculateShadowScore(imageData: ImageData): number {
   const edgeDensity = calculateEdgeDensity(imageData);
   const textureComplexity = calculateTextureComplexity(imageData);
   const colorVariance = calculateColorVariance(imageData);
-  
+
   const edgeScore = Math.max(0, 1 - (edgeDensity / CONFIG.EDGE_DENSITY_THRESHOLD));
   const textureScore = Math.max(0, 1 - (textureComplexity / CONFIG.TEXTURE_COMPLEXITY_THRESHOLD));
   const colorScore = Math.max(0, 1 - (colorVariance / CONFIG.COLOR_VARIANCE_THRESHOLD));
-  
+
   return (edgeScore + textureScore + colorScore) / 3;
 }
 
@@ -320,7 +320,7 @@ function calculateTextureComplexity(imageData: ImageData): number {
       const centerIdx = (y * width + x) * 4;
       const centerValue = (data[centerIdx] + data[centerIdx + 1] + data[centerIdx + 2]) / 3;
       let pattern = 0;
-      const neighbors = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+      const neighbors = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
       for (let i = 0; i < neighbors.length; i++) {
         const [dy, dx] = neighbors[i];
         const idx = ((y + dy) * width + (x + dx)) * 4;
@@ -373,43 +373,46 @@ async function verifyWithModel(space: ParkingSpace, imageTensor: tf.Tensor3D): P
       );
     });
 
-    // Prepare input for COCO-SSD (expects [height, width, 3] tensor with values 0-255)
-    cocoInput = tf.tidy(() => {
-      // Resize to at least 300x300 if smaller (COCO-SSD expects minimum size)
+    // Prepare COCO-SSD input: expects minimum 300x300, values in 0–255, dtype int32
+    const cocoInput = tf.tidy(() => {
       const minSize = 300;
       const [h, w] = cropped!.shape.slice(0, 2);
       const resizeNeeded = h < minSize || w < minSize;
-      
-      const resized = resizeNeeded ? 
-        tf.image.resizeBilinear(cropped!, [
-          Math.max(minSize, h),
-          Math.max(minSize, w)
-        ]) : 
-        cropped!;
 
-      // Convert to 0-255 range
-      return tf.mul(resized, 255);
+      const resized = resizeNeeded
+        ? tf.image.resizeBilinear(cropped!, [
+          Math.max(minSize, h),
+          Math.max(minSize, w),
+        ])
+        : cropped!;
+
+      // Convert to 0–255 and cast to int32
+      const scaled = tf.mul(resized, 255);
+      return tf.cast(scaled, 'int32'); // required for coco-ssd
     });
 
-    // Prepare input for MobileNet (expects [224, 224, 3] tensor with values 0-1)
-    mobilenetInput = tf.tidy(() => {
-      return tf.image.resizeBilinear(cropped!, [224, 224]);
+
+    // Prepare MobileNet input: expects [224, 224, 3], values in [0, 1], dtype float32 (default)
+    const mobilenetInput = tf.tidy(() => {
+      return tf.image.resizeBilinear(cropped!, [224, 224]); // cropped! should already be float32 [0–1]
     });
 
     // Run detection and classification in parallel
     const [predictions, features] = await Promise.all([
       objectDetector.detect(cocoInput as tf.Tensor3D),
-      featureExtractor.classify(mobilenetInput as tf.Tensor3D)
+      featureExtractor.classify(mobilenetInput as tf.Tensor3D),
     ]);
+    cocoInput.dispose();
+    mobilenetInput.dispose();
 
     const vehicleClasses = ['car', 'truck', 'bus', 'motorcycle', 'vehicle', 'van', 'suv', 'pickup'];
-    const vehiclePredictions = predictions.filter(p => 
-      vehicleClasses.some(vc => p.class.toLowerCase().includes(vc)) && 
+    const vehiclePredictions = predictions.filter(p =>
+      vehicleClasses.some(vc => p.class.toLowerCase().includes(vc)) &&
       p.score > CONFIG.MIN_VEHICLE_CONFIDENCE
     );
 
     if (vehiclePredictions.length > 0) {
-      const bestPrediction = vehiclePredictions.reduce((best, current) => 
+      const bestPrediction = vehiclePredictions.reduce((best, current) =>
         current.score > best.score ? current : best
       );
 
@@ -428,13 +431,13 @@ async function verifyWithModel(space: ParkingSpace, imageTensor: tf.Tensor3D): P
 
     if (features && features.length > 0) {
       const vehicleKeywords = ['car', 'truck', 'bus', 'motorcycle', 'vehicle', 'van'];
-      const vehicleFeatures = features.some(f => 
+      const vehicleFeatures = features.some(f =>
         vehicleKeywords.some(vk => f.className.toLowerCase().includes(vk)) &&
         f.probability > 0.5
       );
 
       if (vehicleFeatures) {
-        const bestFeature = features.reduce((best, current) => 
+        const bestFeature = features.reduce((best, current) =>
           current.probability > best.probability ? current : best
         );
 
@@ -496,8 +499,8 @@ function applyTemporalSmoothing(currentSpaces: ParkingSpace[], previousSpaces: P
       ...space,
       isOccupied: newState,
       stateHistory,
-      lastStateChange: newState === previousSpace.isOccupied ? 
-        previousSpace.lastStateChange : 
+      lastStateChange: newState === previousSpace.isOccupied ?
+        previousSpace.lastStateChange :
         Date.now(),
       confidence: Math.min(1, weightedAverage * stabilityFactor),
       features: {
@@ -511,8 +514,8 @@ function applyTemporalSmoothing(currentSpaces: ParkingSpace[], previousSpaces: P
 }
 
 async function drawResults(
-  ctx: CanvasRenderingContext2D, 
-  img: HTMLImageElement | HTMLVideoElement, 
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | HTMLVideoElement,
   spaces: ParkingSpace[]
 ): Promise<string> {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -520,10 +523,10 @@ async function drawResults(
 
   spaces.forEach(space => {
     const { region, isOccupied, confidence, vehicleType, features } = space;
-    const color = isOccupied ? 
-      `rgba(239, 68, 68, ${Math.max(0.5, confidence)})` : 
+    const color = isOccupied ?
+      `rgba(239, 68, 68, ${Math.max(0.5, confidence)})` :
       `rgba(34, 197, 94, ${Math.max(0.5, confidence)})`;
-    
+
     ctx.strokeStyle = color;
     ctx.fillStyle = color.replace(/[\d\.]+\)$/, '0.2)');
     ctx.lineWidth = isOccupied ? 3 : 2;
@@ -538,21 +541,21 @@ async function drawResults(
     const bounds = getRegionBounds(region);
     const centerX = bounds.minX + bounds.width / 2;
     const centerY = bounds.minY + bounds.height / 2;
-    
+
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(bounds.minX + 5, bounds.minY + 5, 100, 20);
     ctx.fillStyle = 'white';
     ctx.font = '12px Arial';
-    ctx.fillText(`${Math.round(confidence * 100)}%${vehicleType ? ` (${vehicleType})` : ''}`, 
+    ctx.fillText(`${Math.round(confidence * 100)}%${vehicleType ? ` (${vehicleType})` : ''}`,
       bounds.minX + 10, bounds.minY + 19);
-    
+
     const stabilityWidth = 30 * features.stabilityScore;
     ctx.fillStyle = 'rgba(255,255,255,0.3)';
     ctx.fillRect(bounds.minX + 5, bounds.minY + 30, 30, 5);
-    ctx.fillStyle = features.stabilityScore > 0.7 ? 'rgba(34, 197, 94, 0.8)' : 
-                   features.stabilityScore > 0.4 ? 'rgba(234, 179, 8, 0.8)' : 'rgba(239, 68, 68, 0.8)';
+    ctx.fillStyle = features.stabilityScore > 0.7 ? 'rgba(34, 197, 94, 0.8)' :
+      features.stabilityScore > 0.4 ? 'rgba(234, 179, 8, 0.8)' : 'rgba(239, 68, 68, 0.8)';
     ctx.fillRect(bounds.minX + 5, bounds.minY + 30, stabilityWidth, 5);
-    
+
     if (settings.showDebugInfo) {
       ctx.font = '10px Arial';
       ctx.fillStyle = 'white';
@@ -589,28 +592,28 @@ export async function detectParkingSpaces(
   processingTime?: number;
 }> {
   const startTime = performance.now();
-  
+
   try {
     if (!imageSource) {
       throw new Error('Invalid image source');
     }
 
-    const validRegions: Region[] = Array.isArray(regions) ? 
+    const validRegions: Region[] = Array.isArray(regions) ?
       regions.filter(region => {
-        const isValid = region && 
-                      typeof region.id === 'string' &&
-                      Array.isArray(region.points) &&
-                      region.points.length >= 3 &&
-                      region.points.every(p => 
-                        p && typeof p.x === 'number' && typeof p.y === 'number'
-                      );
+        const isValid = region &&
+          typeof region.id === 'string' &&
+          Array.isArray(region.points) &&
+          region.points.length >= 3 &&
+          region.points.every(p =>
+            p && typeof p.x === 'number' && typeof p.y === 'number'
+          );
         return isValid;
       }) : [];
 
     const currentTime = Date.now();
     const timeDiff = currentTime - lastFrameTime;
     lastFrameTime = currentTime;
-    
+
     if (timeDiff < 1000 / 30 && frameCount > 0 && frameCount % CONFIG.MAX_FRAME_SKIP !== 0) {
       frameCount++;
       return {
@@ -686,17 +689,17 @@ export async function detectParkingSpaces(
         // Multi-stage adaptive thresholding
         const binary1 = adaptiveThreshold(enhanced, 15, 5);
         const binary2 = adaptiveThreshold(enhanced, 25, 10);
-        
+
         // Convert to boolean before logical operation
         const bool1 = tf.greater(binary1, tf.scalar(0.5));
         const bool2 = tf.greater(binary2, tf.scalar(0.5));
-        
+
         const combined = tf.logicalOr(bool1, bool2);
         const cleaned = medianBlur(tf.cast(combined, 'float32'), 3);
         return dilate(cleaned, 2);
       });
 
-      const motionScore = settings.useMotionDetection ? 
+      const motionScore = settings.useMotionDetection ?
         calculateEnhancedMotionScore(tensor, previousFrame) : 0;
 
       if (previousFrame) previousFrame.dispose();
@@ -734,17 +737,17 @@ export async function detectParkingSpaces(
           const hasTexture = textureFeatures.complexity > CONFIG.TEXTURE_COMPLEXITY_THRESHOLD;
           const hasEdges = edgeFeatures.density > CONFIG.EDGE_DENSITY_THRESHOLD;
           const hasColorVariation = colorVariance > CONFIG.COLOR_VARIANCE_THRESHOLD;
-          
-          const occupancyScore = 
-            (normalizedCount * 0.4) + 
-            (hasTexture ? 0.2 : 0) + 
-            (hasEdges ? 0.2 : 0) + 
+
+          const occupancyScore =
+            (normalizedCount * 0.4) +
+            (hasTexture ? 0.2 : 0) +
+            (hasEdges ? 0.2 : 0) +
             (hasColorVariation ? 0.1 : 0) +
             (hasMotion ? 0.1 : 0);
 
           const isOccupied = isShadow && occupancyScore > dynamicThreshold;
 
-          const confidence = Math.min(1, 
+          const confidence = Math.min(1,
             (isShadow ? (1 - Math.abs(occupancyScore - dynamicThreshold)) : 0.5) *
             (1 + 0.3 * motionScore) *
             stabilityScore
@@ -791,12 +794,12 @@ export async function detectParkingSpaces(
 
       spaces = applyEnhancedTemporalSmoothing(spaces, previousSpaces);
 
-      const resultImage = settings.showDebugInfo ? 
-        await drawResults(ctx, img, spaces) : 
+      const resultImage = settings.showDebugInfo ?
+        await drawResults(ctx, img, spaces) :
         undefined;
 
       const processingTime = performance.now() - startTime;
-      
+
       return {
         total: spaces.length,
         occupied: spaces.filter(s => s.isOccupied).length,
@@ -820,7 +823,7 @@ function generateGaussianKernel(size: number, sigma: number): tf.Tensor2D {
   const kernel = Array(size * size).fill(0);
   const center = Math.floor(size / 2);
   let sum = 0;
-  
+
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const dx = x - center;
@@ -830,12 +833,12 @@ function generateGaussianKernel(size: number, sigma: number): tf.Tensor2D {
       sum += value;
     }
   }
-  
+
   // Normalize the kernel
   for (let i = 0; i < kernel.length; i++) {
     kernel[i] /= sum;
   }
-  
+
   return tf.tensor2d(kernel, [size, size]).expandDims(2).expandDims(3);
 }
 
@@ -845,17 +848,17 @@ function calculateEnhancedMotionScore(currentFrame: tf.Tensor3D, previousFrame: 
     // Convert to grayscale first
     const currentGray = tf.image.rgbToGrayscale(currentFrame);
     const previousGray = tf.image.rgbToGrayscale(previousFrame);
-    
+
     // Calculate absolute difference
     const diff = tf.abs(tf.sub(currentGray, previousGray));
-    
+
     // Apply threshold to ignore small changes
     const thresholded = tf.greater(diff, tf.scalar(0.05));
-    
+
     // Calculate percentage of changed pixels
     const changedPixels = tf.sum(tf.cast(thresholded, 'float32'));
     const totalPixels = currentGray.shape[0] * currentGray.shape[1];
-    
+
     return changedPixels.dataSync()[0] / totalPixels;
   });
 }
@@ -865,13 +868,13 @@ function calculateEnhancedShadowScore(imageData: ImageData): number {
   const textureFeatures = calculateEnhancedTextureFeatures(imageData);
   const colorVariance = calculateColorVariance(imageData);
   const brightness = calculateBrightness(imageData);
-  
+
   // Enhanced shadow detection using multiple features
   const edgeScore = Math.max(0, 1 - (edgeFeatures.density / (CONFIG.EDGE_DENSITY_THRESHOLD * 1.5)));
   const textureScore = Math.max(0, 1 - (textureFeatures.complexity / (CONFIG.TEXTURE_COMPLEXITY_THRESHOLD * 1.5)));
   const colorScore = Math.max(0, 1 - (colorVariance / (CONFIG.COLOR_VARIANCE_THRESHOLD * 1.5)));
   const brightnessScore = Math.max(0, 1 - (brightness / 0.5));
-  
+
   // Weighted combination of features
   return (edgeScore * 0.4 + textureScore * 0.3 + colorScore * 0.2 + brightnessScore * 0.1);
 }
@@ -881,15 +884,15 @@ function calculateEnhancedEdgeFeatures(imageData: ImageData): { density: number,
   let strength = 0;
   let orientationSum = 0;
   let count = 0;
-  
+
   edges.forEach((row, y) => {
     row.forEach((value, x) => {
       if (value > 25) { // Threshold for significant edges
         strength += value;
         // Calculate local orientation (simplified)
         if (x > 0 && y > 0 && x < imageData.width - 1 && y < imageData.height - 1) {
-          const dx = edges[y][x+1] - edges[y][x-1];
-          const dy = edges[y+1][x] - edges[y-1][x];
+          const dx = edges[y][x + 1] - edges[y][x - 1];
+          const dy = edges[y + 1][x] - edges[y - 1][x];
           if (dx !== 0 || dy !== 0) {
             orientationSum += Math.atan2(dy, dx);
             count++;
@@ -898,10 +901,10 @@ function calculateEnhancedEdgeFeatures(imageData: ImageData): { density: number,
       }
     });
   });
-  
+
   const density = strength / (imageData.width * imageData.height * 255);
   const orientation = count > 0 ? orientationSum / count : 0;
-  
+
   return { density, orientation };
 }
 
@@ -918,35 +921,35 @@ function calculateEnhancedTextureFeatures(imageData: ImageData): { complexity: n
       const centerIdx = (y * width + x) * 4;
       const centerValue = (data[centerIdx] + data[centerIdx + 1] + data[centerIdx + 2]) / 3;
       hist[Math.floor(centerValue)]++;
-      
+
       let pattern = 0;
-      const neighbors = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+      const neighbors = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
       for (let i = 0; i < neighbors.length; i++) {
         const [dy, dx] = neighbors[i];
         const idx = ((y + dy) * width + (x + dx)) * 4;
         const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
         if (val > centerValue) pattern |= (1 << i);
       }
-      
+
       let transitions = 0;
       for (let i = 0; i < 8; i++) {
         const bit1 = (pattern >> i) & 1;
         const bit2 = (pattern >> ((i + 1) % 8)) & 1;
         if (bit1 !== bit2) transitions++;
       }
-      
+
       if (transitions <= 2) complexity++;
       total++;
     }
   }
-  
+
   // Calculate uniformity from histogram
   let sumSquares = 0;
   for (let i = 0; i < hist.length; i++) {
     sumSquares += Math.pow(hist[i] / total, 2);
   }
   uniformity = sumSquares;
-  
+
   return {
     complexity: complexity / total,
     uniformity
@@ -974,18 +977,18 @@ function applyEnhancedTemporalSmoothing(currentSpaces: ParkingSpace[], previousS
     const weightedAverage = weightedSum / totalWeight;
 
     // Enhanced stability calculation considering feature consistency
-    const featureConsistency = Math.min(1, 
+    const featureConsistency = Math.min(1,
       0.3 * (1 - Math.abs(space.features.edgeDensity - previousSpace.features.edgeDensity)) +
       0.3 * (1 - Math.abs(space.features.textureComplexity - previousSpace.features.textureComplexity)) +
       0.2 * (1 - Math.abs(space.features.colorVariance - previousSpace.features.colorVariance)) +
       0.2 * (1 - Math.abs(space.features.brightness - previousSpace.features.brightness))
     );
-    
+
     const stabilityFactor = 0.7 * space.features.stabilityScore + 0.3 * featureConsistency;
     const newState = weightedAverage > (0.65 * stabilityFactor);
 
     // Calculate confidence with feature consistency
-    const featureConfidence = Math.min(1, 
+    const featureConfidence = Math.min(1,
       (space.features.edgeDensity > CONFIG.EDGE_DENSITY_THRESHOLD ? 1.2 : 0.8) *
       (space.features.textureComplexity > CONFIG.TEXTURE_COMPLEXITY_THRESHOLD ? 1.2 : 0.8) *
       (space.features.colorVariance > CONFIG.COLOR_VARIANCE_THRESHOLD ? 1.1 : 0.9)
@@ -995,8 +998,8 @@ function applyEnhancedTemporalSmoothing(currentSpaces: ParkingSpace[], previousS
       ...space,
       isOccupied: newState,
       stateHistory,
-      lastStateChange: newState === previousSpace.isOccupied ? 
-        previousSpace.lastStateChange : 
+      lastStateChange: newState === previousSpace.isOccupied ?
+        previousSpace.lastStateChange :
         Date.now(),
       confidence: Math.min(1, weightedAverage * stabilityFactor * featureConfidence),
       features: {

@@ -15,7 +15,8 @@ import {
   Volume2,
   VolumeX,
   Download,
-  RefreshCw
+  RefreshCw,
+  Image as ImageIcon
 } from 'lucide-react';
 import { detectParkingSpaces } from '../utils/parkingDetection';
 import RegionSelector from '../components/RegionSelector';
@@ -43,6 +44,8 @@ const LiveDetection: React.FC = () => {
   const [currentFrame, setCurrentFrame] = useState<string | null>(null);
   const frameRequestRef = useRef<number>();
   const [isVideoReady, setIsVideoReady] = useState(false);
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [showRegionSelector, setShowRegionSelector] = useState(false);
   const [detectionResults, setDetectionResults] = useState<{
     total: number;
     occupied: number;
@@ -62,6 +65,26 @@ const LiveDetection: React.FC = () => {
     occupied: number;
     available: number;
   }>>([]);
+
+  const handleReferenceImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      
+      if (!file.type.startsWith('image/')) {
+        setError('Please upload a valid image file');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setReferenceImage(event.target.result as string);
+          setShowRegionSelector(true);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   // Function to capture current frame
   const captureFrame = useCallback(() => {
@@ -337,6 +360,17 @@ const LiveDetection: React.FC = () => {
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Video Feed</h2>
               <div className="flex gap-2">
+                {!referenceImage && (
+                  <label className="px-4 py-2 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700 transition-colors">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleReferenceImageUpload}
+                      className="hidden"
+                    />
+                    Upload Reference Image
+                  </label>
+                )}
                 <button
                   onClick={() => setIsVideoMode(false)}
                   className={`px-3 py-1 rounded-lg transition-colors ${
@@ -371,141 +405,151 @@ const LiveDetection: React.FC = () => {
               </div>
             )}
             
-            <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-              {isVideoMode ? (
-                videoUrl ? (
-                  <>
-                    <video
-                      ref={videoRef}
-                      className="w-full h-full object-contain"
-                      playsInline
-                      loop={isLooping}
-                      muted={isMuted}
-                      src={videoUrl}
-                      crossOrigin="anonymous"
-                      preload="auto"
-                    />
-                    <canvas
-                      ref={canvasRef}
-                      className="absolute inset-0 pointer-events-none"
-                      style={{ width: '100%', height: '100%' }}
-                    />
-                    
-                    <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black to-transparent">
-                      <div className="flex items-center justify-between text-white">
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={toggleMute}
-                            className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full"
-                          >
-                            {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
-                          </button>
-                          <button
-                            onClick={() => handleSeek('backward')}
-                            className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full"
-                          >
-                            <Rewind size={20} />
-                          </button>
-                          {isDetecting ? (
+            {showRegionSelector && referenceImage ? (
+              <div className="mb-4">
+                <h3 className="font-medium mb-2">Define Parking Spaces</h3>
+                <RegionSelector
+                  imageUrl={referenceImage}
+                  onRegionsChange={setRegions}
+                />
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={() => setShowRegionSelector(false)}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                  >
+                    Apply Regions
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
+                {isVideoMode ? (
+                  videoUrl ? (
+                    <>
+                      <video
+                        ref={videoRef}
+                        className="w-full h-full object-contain"
+                        playsInline
+                        loop={isLooping}
+                        muted={isMuted}
+                        src={videoUrl}
+                        crossOrigin="anonymous"
+                        preload="auto"
+                      />
+                      <canvas
+                        ref={canvasRef}
+                        className="absolute inset-0 pointer-events-none"
+                        style={{ width: '100%', height: '100%' }}
+                      />
+                      
+                      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black to-transparent">
+                        <div className="flex items-center justify-between text-white">
+                          <div className="flex items-center space-x-2">
                             <button
-                              onClick={stopDetection}
+                              onClick={toggleMute}
                               className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full"
                             >
-                              <Pause size={20} />
+                              {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
                             </button>
-                          ) : (
                             <button
-                              onClick={startDetection}
+                              onClick={() => handleSeek('backward')}
                               className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full"
-                              disabled={!isVideoReady}
                             >
-                              <Play size={20} />
+                              <Rewind size={20} />
                             </button>
-                          )}
-                          <button
-                            onClick={() => handleSeek('forward')}
-                            className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full"
-                          >
-                            <FastForward size={20} />
-                          </button>
-                          <button
-                            onClick={toggleLoop}
-                            className={`p-2 hover:bg-white hover:bg-opacity-20 rounded-full ${
-                              isLooping ? 'text-blue-400' : ''
-                            }`}
-                          >
-                            <RotateCcw size={20} />
-                          </button>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <select
-                            value={playbackRate}
-                            onChange={(e) => handlePlaybackRateChange(Number(e.target.value))}
-                            className="bg-transparent border border-white border-opacity-20 rounded px-2 py-1 text-white"
-                          >
-                            <option value="0.5" className="text-black">0.5x</option>
-                            <option value="1" className="text-black">1x</option>
-                            <option value="1.5" className="text-black">1.5x</option>
-                            <option value="2" className="text-black">2x</option>
-                          </select>
+                            {isDetecting ? (
+                              <button
+                                onClick={stopDetection}
+                                className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full"
+                              >
+                                <Pause size={20} />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={startDetection}
+                                className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full"
+                                disabled={!isVideoReady}
+                              >
+                                <Play size={20} />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleSeek('forward')}
+                              className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full"
+                            >
+                              <FastForward size={20} />
+                            </button>
+                            <button
+                              onClick={toggleLoop}
+                              className={`p-2 hover:bg-white hover:bg-opacity-20 rounded-full ${
+                                isLooping ? 'text-blue-400' : ''
+                              }`}
+                            >
+                              <RotateCcw size={20} />
+                            </button>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <select
+                              value={playbackRate}
+                              onChange={(e) => handlePlaybackRateChange(Number(e.target.value))}
+                              className="bg-transparent border border-white border-opacity-20 rounded px-2 py-1 text-white"
+                            >
+                              <option value="0.5" className="text-black">0.5x</option>
+                              <option value="1" className="text-black">1x</option>
+                              <option value="1.5" className="text-black">1.5x</option>
+                              <option value="2" className="text-black">2x</option>
+                            </select>
+                          </div>
                         </div>
                       </div>
+                    </>
+                  ) : (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+                      <Video size={48} className="mb-4" />
+                      <label className="px-4 py-2 bg-blue-600 rounded-lg cursor-pointer hover:bg-blue-700 transition-colors">
+                        <input
+                          type="file"
+                          accept="video/*"
+                          onChange={handleVideoUpload}
+                          className="hidden"
+                        />
+                        Upload Video
+                      </label>
                     </div>
-                  </>
+                  )
                 ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-                    <Video size={48} className="mb-4" />
-                    <label className="px-4 py-2 bg-blue-600 rounded-lg cursor-pointer hover:bg-blue-700 transition-colors">
-                      <input
-                        type="file"
-                        accept="video/*"
-                        onChange={handleVideoUpload}
-                        className="hidden"
-                      />
-                      Upload Video
-                    </label>
+                  hasCamera ? (
+                    <Webcam
+                      ref={webcamRef}
+                      audio={false}
+                      screenshotFormat="image/jpeg"
+                      videoConstraints={{
+                        width: 1280,
+                        height: 720,
+                        facingMode: "environment"
+                      }}
+                      onUserMediaError={handleCameraError}
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+                      <CameraOff size={48} className="mb-4" />
+                      <p>Camera not available</p>
+                    </div>
+                  )
+                )}
+                
+                {isDetecting && detectionResults.image && (
+                  <div className="absolute inset-0 pointer-events-none">
+                    <img 
+                      src={detectionResults.image} 
+                      alt="Detection results" 
+                      className="w-full h-full object-contain"
+                    />
                   </div>
-                )
-              ) : (
-                hasCamera ? (
-                  <Webcam
-                    ref={webcamRef}
-                    audio={false}
-                    screenshotFormat="image/jpeg"
-                    videoConstraints={{
-                      width: 1280,
-                      height: 720,
-                      facingMode: "environment"
-                    }}
-                    onUserMediaError={handleCameraError}
-                    className="w-full h-full object-contain"
-                  />
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-                    <CameraOff size={48} className="mb-4" />
-                    <p>Camera not available</p>
-                  </div>
-                )
-              )}
-              
-              {isDetecting && detectionResults.image && (
-                <div className="absolute inset-0 pointer-events-none">
-                  <img 
-                    src={detectionResults.image} 
-                    alt="Detection results" 
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-              )}
-            </div>
-            
-            <div className="mt-4">
-              <h3 className="font-medium mb-2">Define Parking Spaces</h3>
-              <RegionSelector
-                imageUrl={currentFrame || ''}
-                onRegionsChange={setRegions}
-              />
-            </div>
+                )}
+              </div>
+            )}
             
             <div className="mt-4 flex flex-wrap gap-2">
               {isDetecting ? (
