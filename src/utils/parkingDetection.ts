@@ -651,7 +651,7 @@ export async function detectParkingSpaces(
       });
     } else {
       img = imageSource;
-      if (img.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+      if (img.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
         console.log(img.readyState);
         throw new Error('Video not ready');
       }

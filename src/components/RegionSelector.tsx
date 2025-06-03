@@ -11,6 +11,15 @@ interface Region {
   id: string;
   points: Point[];
   type: 'rectangle' | 'quadrilateral';
+  originalImageSize?: {
+    width: number;
+    height: number;
+  };
+}
+
+interface RegionSelectorProps {
+  imageUrl: string;
+  onRegionsChange: (regions: Region[]) => void;
 }
 
 interface HistoryState {
@@ -53,11 +62,6 @@ const useHistory = create<HistoryState>((set) => ({
       };
     }),
 }));
-
-interface RegionSelectorProps {
-  imageUrl: string;
-  onRegionsChange: (regions: Region[]) => void;
-}
 
 const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChange }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -106,9 +110,14 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
   }, [imageUrl]);
 
   useEffect(() => {
-    onRegionsChange(regions);
+    // When regions change, add original image size to each region
+    const regionsWithSize = regions.map(region => ({
+      ...region,
+      originalImageSize: originalSize
+    }));
+    onRegionsChange(regionsWithSize);
     redrawCanvas();
-  }, [regions]);
+  }, [regions, originalSize]);
 
   useEffect(() => {
     const handleKeyboard = (e: KeyboardEvent) => {
@@ -506,4 +515,3 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
 };
 
 export default RegionSelector;
-

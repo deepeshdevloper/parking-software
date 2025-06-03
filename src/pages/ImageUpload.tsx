@@ -121,13 +121,13 @@ const ImageUpload: React.FC = () => {
 
       setIsProcessing(true);
       setError(null);
-
+      console.log("previous image result",previousResults);
       const result = await detectParkingSpaces(
         selectedImage,
         regions,
         previousResults?.spaces || []
       );
-
+      console.log("image result",result);
       setPreviousResults(result);
       setProcessedImage(result.image || null);
     } catch (error) {
