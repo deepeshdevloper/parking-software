@@ -361,6 +361,7 @@ const LiveDetection: React.FC = () => {
       startFrameCapture();
     }
 
+    // Increased interval for smoother performance
     detectionInterval.current = window.setInterval(async () => {
       try {
         if (element instanceof HTMLVideoElement && element.paused) return;
@@ -369,31 +370,37 @@ const LiveDetection: React.FC = () => {
         const results = await detectParkingSpaces(element, regions, detectionResults?.spaces || []);
         const processingTime = performance.now() - startTime;
         
-        const timestamp = isVideoMode ? videoRef.current?.currentTime || 0 : Date.now() / 1000;
+        // Only update state if detection is still active
+        if (isDetecting) {
+          const timestamp = isVideoMode ? videoRef.current?.currentTime || 0 : Date.now() / 1000;
 
-        setDetectionResults(prev => ({
-          ...results,
-          timestamp,
-          processingTime,
-          image: prev.image
-        }));
-        
-        setDetectionHistory(prev => [...prev.slice(-99), {
-          timestamp,
-          occupied: results.occupied,
-          available: results.available
-        }]);
+          setDetectionResults(prev => ({
+            ...results,
+            timestamp,
+            processingTime,
+            image: prev.image
+          }));
+          
+          setDetectionHistory(prev => [...prev.slice(-99), {
+            timestamp,
+            occupied: results.occupied,
+            available: results.available
+          }]);
 
-        drawRegionsOverlay();
-        setIsProcessing(false);
+          drawRegionsOverlay();
+          setIsProcessing(false);
+        }
       } catch (err) {
         console.error('Detection error:', err);
-        setError('Error processing video feed. Please try again.');
-        stopDetection();
+        // Don't stop detection on temporary errors
+        if (err.message !== 'Video data not yet available') {
+          setError('Error processing video feed. Please try again.');
+          stopDetection();
+        }
         setIsProcessing(false);
       }
-    }, 1000);
-  }, [isVideoMode, regions, startFrameCapture, isVideoReady, drawRegionsOverlay, detectionResults?.spaces]);
+    }, 100); // Increased interval from default
+  }, [isVideoMode, regions, startFrameCapture, isVideoReady, drawRegionsOverlay, detectionResults?.spaces, isDetecting]);
 
   const stopDetection = useCallback(() => {
     detectionInterval.current && window.clearInterval(detectionInterval.current);
@@ -776,6 +783,7 @@ const LiveDetection: React.FC = () => {
               color="red"
             />
             <ResultCard
+              
               label="Available Spaces"
               value={detectionResults.available.toString()}
               darkMode={settings.enableDarkMode}
@@ -868,4 +876,3 @@ const LiveDetection: React.FC = () => {
 };
 
 export default LiveDetection;
-
