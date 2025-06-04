@@ -55,6 +55,41 @@ interface DetectionResults {
   processingTime?: number;
 }
 
+interface ResultCardProps {
+  label: string;
+  value: string;
+  darkMode: boolean;
+  color?: 'blue' | 'red' | 'green' | 'amber';
+}
+
+const ResultCard: React.FC<ResultCardProps> = ({
+  label,
+  value,
+  darkMode,
+  color = 'blue'
+}) => {
+  const getColorClasses = () => {
+    const baseClasses = 'text-lg font-bold';
+    switch (color) {
+      case 'red':
+        return `${baseClasses} ${darkMode ? 'text-red-400' : 'text-red-600'}`;
+      case 'green':
+        return `${baseClasses} ${darkMode ? 'text-green-400' : 'text-green-600'}`;
+      case 'amber':
+        return `${baseClasses} ${darkMode ? 'text-amber-400' : 'text-amber-600'}`;
+      default:
+        return `${baseClasses} ${darkMode ? 'text-blue-400' : 'text-blue-600'}`;
+    }
+  };
+
+  return (
+    <div className={`p-3 rounded-lg border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-200'}`}>
+      <div className={darkMode ? 'text-gray-300' : 'text-gray-600'}>{label}</div>
+      <div className={getColorClasses()}>{value}</div>
+    </div>
+  );
+};
+
 const LiveDetection: React.FC = () => {
   const { settings } = useSettings();
   const webcamRef = useRef<Webcam>(null);
@@ -87,6 +122,8 @@ const LiveDetection: React.FC = () => {
     occupied: number;
     available: number;
   }>>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [showDebugInfo, setShowDebugInfo] = useState(false);
 
   const scaleRegionToVideo = useCallback((region: Region, videoWidth: number, videoHeight: number): Region => {
     if (!region.originalImageSize) return region;
@@ -103,10 +140,30 @@ const LiveDetection: React.FC = () => {
     };
   }, []);
 
+  const captureFrame = useCallback(() => {
+    if (!isDetecting) return;
+
+    if (isVideoMode && videoRef.current && isVideoReady) {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0);
+        setCurrentFrame(canvas.toDataURL('image/jpeg', 0.8));
+      }
+    } else if (!isVideoMode && webcamRef.current) {
+      const frame = webcamRef.current.getScreenshot();
+      frame && setCurrentFrame(frame);
+    }
+  }, [isVideoMode, isVideoReady, isDetecting]);
+
   const drawRegionsOverlay = useCallback(() => {
     if (!overlayCanvasRef.current || !regions.length) return;
 
-    const ctx = overlayCanvasRef.current.getContext('2d');
+    const ctx = overlayCanvasRef.current.getContext('2d', {
+      willReadFrequently: false
+    });
     if (!ctx) return;
 
     let videoWidth, videoHeight;
@@ -118,12 +175,15 @@ const LiveDetection: React.FC = () => {
       videoWidth = webcamRef.current.video.videoWidth;
       videoHeight = webcamRef.current.video.videoHeight;
     } else {
-      videoWidth = 1280;
-      videoHeight = 720;
+      return;
     }
 
-    overlayCanvasRef.current.width = videoWidth;
-    overlayCanvasRef.current.height = videoHeight;
+    if (overlayCanvasRef.current.width !== videoWidth ||
+      overlayCanvasRef.current.height !== videoHeight) {
+      overlayCanvasRef.current.width = videoWidth;
+      overlayCanvasRef.current.height = videoHeight;
+    }
+
     ctx.clearRect(0, 0, videoWidth, videoHeight);
 
     if (detectionResults.spaces.length > 0) {
@@ -135,99 +195,75 @@ const LiveDetection: React.FC = () => {
         const space = detectionResults.spaces.find(s => s.id === index);
         if (!space) return;
 
-        const { confidence, isOccupied, features, vehicleType } = space;
-        const occupiedColor = `rgba(239, 68, 68, ${0.3 + confidence * 0.7})`;
-        const availableColor = `rgba(34, 197, 94, ${0.3 + confidence * 0.7})`;
-        const borderColor = isOccupied ? occupiedColor : availableColor;
-        const fillColor = isOccupied 
-          ? `rgba(239, 68, 68, ${0.1 + confidence * 0.2})` 
-          : `rgba(34, 197, 94, ${0.1 + confidence * 0.2})`;
+        const { confidence, isOccupied, features } = space;
+        const alpha = 0.5 + confidence * 0.5;
+        
+        // Draw the parking space polygon
+        ctx.strokeStyle = isOccupied ? 
+          `rgba(239, 68, 68, ${alpha})` : 
+          `rgba(34, 197, 94, ${alpha})`;
+        ctx.fillStyle = isOccupied ? 
+          `rgba(239, 68, 68, 0.2)` : 
+          `rgba(34, 197, 94, 0.2)`;
+        ctx.lineWidth = 3;
 
-        // Draw region fill
-        ctx.fillStyle = fillColor;
         ctx.beginPath();
         ctx.moveTo(region.points[0].x, region.points[0].y);
         region.points.forEach(p => ctx.lineTo(p.x, p.y));
         ctx.closePath();
         ctx.fill();
-
-        // Draw region border
-        ctx.strokeStyle = borderColor;
-        ctx.lineWidth = 2 + confidence * 2;
-        ctx.beginPath();
-        ctx.moveTo(region.points[0].x, region.points[0].y);
-        region.points.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
         ctx.stroke();
 
-        // Calculate center for text
+        // Draw confidence indicator
         const centerX = region.points.reduce((sum, p) => sum + p.x, 0) / region.points.length;
         const centerY = region.points.reduce((sum, p) => sum + p.y, 0) / region.points.length;
 
-        // Draw confidence circle background
-        const circleRadius = 20;
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         ctx.beginPath();
-        ctx.arc(centerX, centerY, circleRadius, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, 20, 0, Math.PI * 2);
         ctx.fill();
 
-        // Draw confidence percentage
         ctx.fillStyle = 'white';
-        ctx.font = `bold ${12 + confidence * 4}px Arial`;
+        ctx.font = 'bold 14px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(`${Math.round(confidence * 100)}%`, centerX, centerY);
 
-        // Draw vehicle type if available
-        if (vehicleType) {
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-          ctx.fillRect(centerX - 50, centerY + 25, 100, 20);
-          ctx.fillStyle = 'white';
-          ctx.font = '12px Arial';
-          ctx.fillText(vehicleType, centerX, centerY + 35);
+        // Debug info
+        if (showDebugInfo) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+          ctx.font = '10px Arial';
+          ctx.textAlign = 'left';
+          ctx.fillText(`ID: ${space.id}`, region.points[0].x + 5, region.points[0].y + 15);
+          ctx.fillText(`Edge: ${features.edgeDensity.toFixed(2)}`, region.points[0].x + 5, region.points[0].y + 30);
+          ctx.fillText(`Motion: ${features.motionScore.toFixed(2)}`, region.points[0].x + 5, region.points[0].y + 45);
         }
-
-        // Draw status indicator
-        const indicatorSize = 10;
-        const cornerX = Math.min(...region.points.map(p => p.x)) + 5;
-        const cornerY = Math.min(...region.points.map(p => p.y)) + 5;
-        
-        ctx.fillStyle = isOccupied ? 'rgba(239, 68, 68, 0.9)' : 'rgba(34, 197, 94, 0.9)';
-        ctx.beginPath();
-        ctx.arc(cornerX, cornerY, indicatorSize, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Draw stability indicator
-        const stabilityWidth = 30 * features.stabilityScore;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.fillRect(cornerX + 20, cornerY - 5, 30, 5);
-        ctx.fillStyle = features.stabilityScore > 0.7 ? 'rgba(34, 197, 94, 0.8)' :
-          features.stabilityScore > 0.4 ? 'rgba(234, 179, 8, 0.8)' : 'rgba(239, 68, 68, 0.8)';
-        ctx.fillRect(cornerX + 20, cornerY - 5, stabilityWidth, 5);
       });
     }
-  }, [regions, detectionResults.spaces, isVideoMode, scaleRegionToVideo]);
+  }, [regions, detectionResults.spaces, isVideoMode, scaleRegionToVideo, showDebugInfo]);
 
-  // Redraw when regions change
-  useEffect(() => {
-    drawRegionsOverlay();
-  }, [regions, drawRegionsOverlay]);
-
-  // Redraw when detection results change
-  useEffect(() => {
-    drawRegionsOverlay();
-  }, [detectionResults, drawRegionsOverlay]);
-
-  // Redraw when video dimensions change
-  useEffect(() => {
-    if (isVideoMode && videoRef.current) {
-      const observer = new ResizeObserver(() => {
-        drawRegionsOverlay();
-      });
-      observer.observe(videoRef.current);
-      return () => observer.disconnect();
+  const startFrameCapture = useCallback(() => {
+    if (!frameRequestRef.current) {
+      const captureLoop = () => {
+        captureFrame();
+        frameRequestRef.current = requestAnimationFrame(captureLoop);
+      };
+      frameRequestRef.current = requestAnimationFrame(captureLoop);
     }
-  }, [isVideoMode, drawRegionsOverlay]);
+  }, [captureFrame]);
+
+  const stopFrameCapture = useCallback(() => {
+    if (frameRequestRef.current) {
+      cancelAnimationFrame(frameRequestRef.current);
+      frameRequestRef.current = undefined;
+    }
+  }, []);
+
+  const handleCameraError = useCallback(() => {
+    setHasCamera(false);
+    setError('Unable to access camera. Please check permissions or try uploading a video instead.');
+    setIsDetecting(false);
+  }, []);
 
   const handleReferenceImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
@@ -247,38 +283,6 @@ const LiveDetection: React.FC = () => {
       reader.readAsDataURL(file);
     }
   };
-
-  const captureFrame = useCallback(() => {
-    if (isVideoMode && videoRef.current && isVideoReady) {
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(videoRef.current, 0, 0);
-        setCurrentFrame(canvas.toDataURL('image/jpeg'));
-      }
-    } else if (!isVideoMode && webcamRef.current) {
-      const frame = webcamRef.current.getScreenshot();
-      frame && setCurrentFrame(frame);
-    }
-    frameRequestRef.current = requestAnimationFrame(captureFrame);
-  }, [isVideoMode, isVideoReady]);
-
-  const startFrameCapture = useCallback(() => {
-    frameRequestRef.current && cancelAnimationFrame(frameRequestRef.current);
-    frameRequestRef.current = requestAnimationFrame(captureFrame);
-  }, [captureFrame]);
-
-  const stopFrameCapture = useCallback(() => {
-    frameRequestRef.current && cancelAnimationFrame(frameRequestRef.current);
-  }, []);
-
-  const handleCameraError = useCallback(() => {
-    setHasCamera(false);
-    setError('Unable to access camera. Please check permissions or try uploading a video instead.');
-    setIsDetecting(false);
-  }, []);
 
   const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
@@ -322,16 +326,10 @@ const LiveDetection: React.FC = () => {
     if (!element) return;
 
     setIsDetecting(true);
+    setIsProcessing(true);
     setError(null);
 
     detectionInterval.current && window.clearInterval(detectionInterval.current);
-
-    // Clear and redraw overlay
-    if (overlayCanvasRef.current) {
-      const ctx = overlayCanvasRef.current.getContext('2d');
-      ctx?.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
-    }
-    drawRegionsOverlay();
 
     if (isVideoMode && videoRef.current) {
       try {
@@ -341,6 +339,7 @@ const LiveDetection: React.FC = () => {
         console.error('Video playback failed:', e);
         setError('Failed to play video. Please try again.');
         setIsDetecting(false);
+        setIsProcessing(false);
         return;
       }
     } else {
@@ -351,21 +350,32 @@ const LiveDetection: React.FC = () => {
       try {
         if (element instanceof HTMLVideoElement && element.paused) return;
 
+        const startTime = performance.now();
         const results = await detectParkingSpaces(element, regions, detectionResults?.spaces || []);
+        const processingTime = performance.now() - startTime;
+        
         const timestamp = isVideoMode ? videoRef.current?.currentTime || 0 : Date.now() / 1000;
 
-        setDetectionResults({ ...results, timestamp });
-        setDetectionHistory(prev => [...prev, {
+        setDetectionResults(prev => ({
+          ...results,
+          timestamp,
+          processingTime,
+          image: prev.image // Preserve the previous image
+        }));
+        
+        setDetectionHistory(prev => [...prev.slice(-99), {
           timestamp,
           occupied: results.occupied,
           available: results.available
         }]);
 
         drawRegionsOverlay();
+        setIsProcessing(false);
       } catch (err) {
         console.error('Detection error:', err);
         setError('Error processing video feed. Please try again.');
         stopDetection();
+        setIsProcessing(false);
       }
     }, 1000);
   }, [isVideoMode, regions, startFrameCapture, isVideoReady, drawRegionsOverlay]);
@@ -376,8 +386,8 @@ const LiveDetection: React.FC = () => {
     isVideoMode && videoRef.current?.pause();
     stopFrameCapture();
     setIsDetecting(false);
+    setIsProcessing(false);
 
-    // Clear overlay when stopping
     if (overlayCanvasRef.current) {
       const ctx = overlayCanvasRef.current.getContext('2d');
       ctx?.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height);
@@ -474,7 +484,8 @@ const LiveDetection: React.FC = () => {
         enableWeatherResistance: settings.enableWeatherResistance,
         ignoreHumans: settings.ignoreHumans,
         ignoreAnimals: settings.ignoreAnimals
-      }
+      },
+      spaces: detectionResults.spaces
     };
 
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -486,6 +497,17 @@ const LiveDetection: React.FC = () => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const downloadCurrentFrame = () => {
+    if (!currentFrame) return;
+    
+    const a = document.createElement('a');
+    a.href = currentFrame;
+    a.download = `parking-frame-${new Date().toISOString().slice(0, 19)}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const renderVideoContainer = () => (
@@ -624,6 +646,13 @@ const LiveDetection: React.FC = () => {
                 >
                   Video
                 </button>
+                <button
+                  onClick={() => setShowDebugInfo(!showDebugInfo)}
+                  className={`px-3 py-1 rounded-lg transition-colors ${showDebugInfo ? 'bg-purple-600 text-white' : settings.enableDarkMode ? 'bg-gray-700' : 'bg-gray-200'
+                    }`}
+                >
+                  Debug
+                </button>
               </div>
             </div>
 
@@ -663,8 +692,8 @@ const LiveDetection: React.FC = () => {
                   onClick={startDetection}
                   disabled={(!hasCamera && !videoFile) || regions.length === 0 || (isVideoMode && !isVideoReady)}
                   className={`px-4 py-2 text-white rounded-lg flex items-center transition-colors ${(hasCamera || (videoFile && isVideoReady)) && regions.length > 0
-                      ? 'bg-blue-600 hover:bg-blue-700'
-                      : 'bg-gray-400 cursor-not-allowed'
+                    ? 'bg-blue-600 hover:bg-blue-700'
+                    : 'bg-gray-400 cursor-not-allowed'
                     }`}
                 >
                   <Play size={18} className="mr-2" />
@@ -680,6 +709,16 @@ const LiveDetection: React.FC = () => {
                 Detection Settings
               </button>
 
+              {currentFrame && (
+                <button
+                  onClick={downloadCurrentFrame}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg flex items-center hover:bg-indigo-700 transition-colors"
+                >
+                  <ImageIcon size={18} className="mr-2" />
+                  Save Frame
+                </button>
+              )}
+
               {detectionHistory.length > 0 && (
                 <button
                   onClick={downloadResults}
@@ -688,6 +727,13 @@ const LiveDetection: React.FC = () => {
                   <Download size={18} className="mr-2" />
                   Export Results
                 </button>
+              )}
+
+              {isProcessing && (
+                <div className="flex items-center px-4 py-2 text-blue-600">
+                  <RefreshCw size={18} className="mr-2 animate-spin" />
+                  Processing...
+                </div>
               )}
             </div>
           </div>
@@ -753,6 +799,12 @@ const LiveDetection: React.FC = () => {
                 <span>Animal Filtering:</span>
                 <span>{settings.ignoreAnimals ? 'Enabled' : 'Disabled'}</span>
               </li>
+              {detectionResults.processingTime && (
+                <li className="flex justify-between py-1">
+                  <span>Processing Time:</span>
+                  <span>{detectionResults.processingTime.toFixed(2)}ms</span>
+                </li>
+              )}
             </ul>
           </div>
 
@@ -790,42 +842,6 @@ const LiveDetection: React.FC = () => {
           )}
         </div>
       </div>
-    </div>
-  );
-};
-
-interface ResultCardProps {
-  label: string;
-  value: string;
-  darkMode: boolean;
-  color?: 'blue' | 'red' | 'green' | 'amber';
-}
-
-const ResultCard: React.FC<ResultCardProps> = ({
-  label,
-  value,
-  darkMode,
-  color = 'blue'
-}) => {
-  const getColorClasses = () => {
-    const baseClasses = 'text-lg font-bold';
-    switch (color) {
-      case 'red':
-        return `${baseClasses} ${darkMode ? 'text-red-400' : 'text-red-600'}`;
-      case 'green':
-        return `${baseClasses} ${darkMode ? 'text-green-400' : 'text-green-600'}`;
-      case 'amber':
-        return `${baseClasses} ${darkMode ? 'text-amber-400' : 'text-amber-600'}`;
-      default:
-        return `${baseClasses} ${darkMode ? 'text-blue-400' : 'text-blue-600'}`;
-    }
-  };
-
-  return (
-    <div className={`p-3 rounded-lg border ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-200'
-      }`}>
-      <div className={darkMode ? 'text-gray-300' : 'text-gray-600'}>{label}</div>
-      <div className={getColorClasses()}>{value}</div>
     </div>
   );
 };

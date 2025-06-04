@@ -577,8 +577,6 @@ async function drawResults(
   return ctx.canvas.toDataURL('image/jpeg');
 }
 
-// Enhanced parking space detection functions
-
 export async function detectParkingSpaces(
   imageSource: string | HTMLVideoElement,
   regions: Region[] | null | undefined = [],
@@ -651,9 +649,46 @@ export async function detectParkingSpaces(
       });
     } else {
       img = imageSource;
-      if (img.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-        console.log(img.readyState);
-        throw new Error('Video not ready');
+      
+      // Enhanced video readiness check
+      switch (img.readyState) {
+        case HTMLMediaElement.HAVE_NOTHING:
+          throw new Error('No video data available');
+          
+        case HTMLMediaElement.HAVE_METADATA:
+          // We have metadata but no frames yet
+          if (!img.videoWidth || !img.videoHeight) {
+            throw new Error('Video dimensions not available');
+          }
+          throw new Error('Video data not yet available');
+          
+        case HTMLMediaElement.HAVE_CURRENT_DATA:
+          // We have the current frame, minimum requirement for processing
+          if (img.ended) {
+            throw new Error('Video playback has ended');
+          }
+          break;
+          
+        case HTMLMediaElement.HAVE_FUTURE_DATA:
+        case HTMLMediaElement.HAVE_ENOUGH_DATA:
+          // Optimal states for processing
+          break;
+          
+        default:
+          throw new Error('Invalid video state');
+      }
+
+      // Additional video validity checks
+      if (img.ended) {
+        throw new Error('Video playback has ended');
+      }
+      
+      if (img.paused && !previousSpaces.length) {
+        throw new Error('Video is paused and no previous data available');
+      }
+      
+      if (!img.videoWidth || !img.videoHeight) {
+        throw new Error('Invalid video dimensions');
       }
     }
 
