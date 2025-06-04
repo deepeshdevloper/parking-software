@@ -125,38 +125,22 @@ const LiveDetection: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showDebugInfo, setShowDebugInfo] = useState(false);
 
-  const scaleRegionToVideo = useCallback((region: Region, videoWidth: number, videoHeight: number): Region => {
-    if (!region.originalImageSize) return region;
-
-    const scaleX = videoWidth / region.originalImageSize.width;
-    const scaleY = videoHeight / region.originalImageSize.height;
-
-    return {
+  const scaleRegionsToVideo = useCallback((regions: Region[], videoWidth: number, videoHeight: number): Region[] => {
+    return regions.map(region => ({
       ...region,
-      points: region.points.map(point => ({
-        x: point.x * scaleX,
-        y: point.y * scaleY
-      }))
-    };
+      points: region.points.map(point => {
+        if (!region.originalImageSize) return point;
+        
+        const scaleX = videoWidth / region.originalImageSize.width;
+        const scaleY = videoHeight / region.originalImageSize.height;
+        
+        return {
+          x: point.x * scaleX,
+          y: point.y * scaleY
+        };
+      })
+    }));
   }, []);
-
-  const captureFrame = useCallback(() => {
-    if (!isDetecting) return;
-
-    if (isVideoMode && videoRef.current && isVideoReady) {
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (ctx) {
-        ctx.drawImage(videoRef.current, 0, 0);
-        setCurrentFrame(canvas.toDataURL('image/jpeg', 0.8));
-      }
-    } else if (!isVideoMode && webcamRef.current) {
-      const frame = webcamRef.current.getScreenshot();
-      frame && setCurrentFrame(frame);
-    }
-  }, [isVideoMode, isVideoReady, isDetecting]);
 
   const drawRegionsOverlay = useCallback(() => {
     if (!overlayCanvasRef.current || !regions.length) return;
@@ -178,35 +162,35 @@ const LiveDetection: React.FC = () => {
       return;
     }
 
+    // Update canvas dimensions to match video
     if (overlayCanvasRef.current.width !== videoWidth ||
-      overlayCanvasRef.current.height !== videoHeight) {
+        overlayCanvasRef.current.height !== videoHeight) {
       overlayCanvasRef.current.width = videoWidth;
       overlayCanvasRef.current.height = videoHeight;
     }
 
     ctx.clearRect(0, 0, videoWidth, videoHeight);
 
-    if (detectionResults.spaces.length > 0) {
-      const scaledRegions = regions.map(region =>
-        scaleRegionToVideo(region, videoWidth, videoHeight)
-      );
+    // Scale regions to match video dimensions
+    const scaledRegions = scaleRegionsToVideo(regions, videoWidth, videoHeight);
 
+    if (detectionResults.spaces.length > 0) {
       scaledRegions.forEach((region, index) => {
         const space = detectionResults.spaces.find(s => s.id === index);
         if (!space) return;
 
-        const { confidence, isOccupied, features } = space;
+        const { confidence, isOccupied } = space;
         const alpha = 0.5 + confidence * 0.5;
         
-        // Draw the parking space polygon
         ctx.strokeStyle = isOccupied ? 
           `rgba(239, 68, 68, ${alpha})` : 
           `rgba(34, 197, 94, ${alpha})`;
         ctx.fillStyle = isOccupied ? 
-          `rgba(239, 68, 68, 0.2)` : 
-          `rgba(34, 197, 94, 0.2)`;
+          'rgba(239, 68, 68, 0.2)' : 
+          'rgba(34, 197, 94, 0.2)';
         ctx.lineWidth = 3;
 
+        // Draw region
         ctx.beginPath();
         ctx.moveTo(region.points[0].x, region.points[0].y);
         region.points.forEach(p => ctx.lineTo(p.x, p.y));
@@ -229,18 +213,49 @@ const LiveDetection: React.FC = () => {
         ctx.textBaseline = 'middle';
         ctx.fillText(`${Math.round(confidence * 100)}%`, centerX, centerY);
 
-        // Debug info
-        if (showDebugInfo) {
+        if (showDebugInfo && space.features) {
           ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
           ctx.font = '10px Arial';
           ctx.textAlign = 'left';
           ctx.fillText(`ID: ${space.id}`, region.points[0].x + 5, region.points[0].y + 15);
-          ctx.fillText(`Edge: ${features.edgeDensity.toFixed(2)}`, region.points[0].x + 5, region.points[0].y + 30);
-          ctx.fillText(`Motion: ${features.motionScore.toFixed(2)}`, region.points[0].x + 5, region.points[0].y + 45);
+          ctx.fillText(`Edge: ${space.features.edgeDensity.toFixed(2)}`, region.points[0].x + 5, region.points[0].y + 30);
+          ctx.fillText(`Motion: ${space.features.motionScore.toFixed(2)}`, region.points[0].x + 5, region.points[0].y + 45);
         }
       });
+    } else {
+      // Draw regions without detection data
+      scaledRegions.forEach(region => {
+        ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+        ctx.moveTo(region.points[0].x, region.points[0].y);
+        region.points.forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      });
     }
-  }, [regions, detectionResults.spaces, isVideoMode, scaleRegionToVideo, showDebugInfo]);
+  }, [regions, detectionResults.spaces, isVideoMode, showDebugInfo, scaleRegionsToVideo]);
+
+  const captureFrame = useCallback(() => {
+    if (!isDetecting) return;
+
+    if (isVideoMode && videoRef.current && isVideoReady) {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0);
+        setCurrentFrame(canvas.toDataURL('image/jpeg', 0.8));
+      }
+    } else if (!isVideoMode && webcamRef.current) {
+      const frame = webcamRef.current.getScreenshot();
+      frame && setCurrentFrame(frame);
+    }
+  }, [isVideoMode, isVideoReady, isDetecting]);
 
   const startFrameCapture = useCallback(() => {
     if (!frameRequestRef.current) {
@@ -360,7 +375,7 @@ const LiveDetection: React.FC = () => {
           ...results,
           timestamp,
           processingTime,
-          image: prev.image // Preserve the previous image
+          image: prev.image
         }));
         
         setDetectionHistory(prev => [...prev.slice(-99), {
@@ -378,7 +393,7 @@ const LiveDetection: React.FC = () => {
         setIsProcessing(false);
       }
     }, 1000);
-  }, [isVideoMode, regions, startFrameCapture, isVideoReady, drawRegionsOverlay]);
+  }, [isVideoMode, regions, startFrameCapture, isVideoReady, drawRegionsOverlay, detectionResults?.spaces]);
 
   const stopDetection = useCallback(() => {
     detectionInterval.current && window.clearInterval(detectionInterval.current);
@@ -442,6 +457,12 @@ const LiveDetection: React.FC = () => {
       videoUrl && URL.revokeObjectURL(videoUrl);
     };
   }, [stopFrameCapture, videoUrl]);
+
+  useEffect(() => {
+    if (isDetecting) {
+      drawRegionsOverlay();
+    }
+  }, [isDetecting, detectionResults, drawRegionsOverlay]);
 
   const handlePlaybackRateChange = (newRate: number) => {
     if (videoRef.current) {
@@ -847,3 +868,4 @@ const LiveDetection: React.FC = () => {
 };
 
 export default LiveDetection;
+
