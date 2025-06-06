@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Copy, Clipboard, Undo, Redo, Trash } from 'lucide-react';
+import { Copy, Clipboard, Undo, Redo, Trash, Square, Octagon as Pentagon, Info } from 'lucide-react';
 import { create } from 'zustand';
 
 interface Point {
@@ -11,15 +11,6 @@ interface Region {
   id: string;
   points: Point[];
   type: 'rectangle' | 'quadrilateral';
-  originalImageSize?: {
-    width: number;
-    height: number;
-  };
-}
-
-interface RegionSelectorProps {
-  imageUrl: string;
-  onRegionsChange: (regions: Region[]) => void;
 }
 
 interface HistoryState {
@@ -63,6 +54,11 @@ const useHistory = create<HistoryState>((set) => ({
     }),
 }));
 
+interface RegionSelectorProps {
+  imageUrl: string;
+  onRegionsChange: (regions: Region[]) => void;
+}
+
 const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChange }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -85,22 +81,18 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
     img.src = imageUrl;
     img.onload = () => {
       if (canvasRef.current && containerRef.current) {
-        // Store original image dimensions
         setOriginalSize({ width: img.width, height: img.height });
 
-        // Calculate scale to fit container while maintaining aspect ratio
         const containerWidth = containerRef.current.clientWidth;
-        const containerHeight = containerRef.current.clientHeight;
+        const containerHeight = Math.min(400, window.innerHeight * 0.5);
         const scaleX = containerWidth / img.width;
         const scaleY = containerHeight / img.height;
-        const newScale = Math.min(scaleX, scaleY);
+        const newScale = Math.min(scaleX, scaleY, 1);
         setScale(newScale);
 
-        // Set canvas dimensions to original image size
         canvasRef.current.width = img.width;
         canvasRef.current.height = img.height;
 
-        // Set display size
         canvasRef.current.style.width = `${img.width * newScale}px`;
         canvasRef.current.style.height = `${img.height * newScale}px`;
 
@@ -110,14 +102,9 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
   }, [imageUrl]);
 
   useEffect(() => {
-    // When regions change, add original image size to each region
-    const regionsWithSize = regions.map(region => ({
-      ...region,
-      originalImageSize: originalSize
-    }));
-    onRegionsChange(regionsWithSize);
+    onRegionsChange(regions);
     redrawCanvas();
-  }, [regions, originalSize]);
+  }, [regions]);
 
   useEffect(() => {
     const handleKeyboard = (e: KeyboardEvent) => {
@@ -147,20 +134,19 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw image
     const img = new Image();
     img.src = imageUrl;
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-    // Draw regions
     regions.forEach((region) => {
       ctx.beginPath();
       ctx.strokeStyle = region === selectedRegion ? '#00ff00' : 
                        region === activeRegion ? '#0088ff' : '#ff0000';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 3;
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+      ctx.shadowBlur = 2;
 
       if (region.points.length > 0) {
         ctx.moveTo(region.points[0].x, region.points[0].y);
@@ -172,15 +158,18 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
         }
       }
       ctx.stroke();
+      ctx.shadowBlur = 0;
 
-      // Draw points
       region.points.forEach((point, pointIndex) => {
         ctx.beginPath();
         ctx.fillStyle = selectedPoint?.regionId === region.id && selectedPoint?.pointIndex === pointIndex
           ? '#00ff00'
           : region === selectedRegion ? '#00ff00' : '#ff0000';
-        ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+        ctx.shadowBlur = 2;
+        ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
         ctx.fill();
+        ctx.shadowBlur = 0;
       });
     });
   };
@@ -200,10 +189,9 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
     const pos = getMousePos(e);
 
     if (mode === 'edit') {
-      // Check if clicking on a point
       for (const region of regions) {
         const pointIndex = region.points.findIndex(point => 
-          Math.hypot(point.x - pos.x, point.y - pos.y) < 10
+          Math.hypot(point.x - pos.x, point.y - pos.y) < 15
         );
         if (pointIndex !== -1) {
           setSelectedPoint({ regionId: region.id, pointIndex });
@@ -213,7 +201,6 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
         }
       }
 
-      // Check if clicking inside a region
       for (const region of regions) {
         if (isPointInRegion(pos, region)) {
           setSelectedRegion(region);
@@ -223,7 +210,6 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
 
       setSelectedRegion(null);
     } else {
-      // Start drawing new region
       const newRegion: Region = {
         id: Date.now().toString(),
         points: [pos],
@@ -241,7 +227,6 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
     const pos = getMousePos(e);
 
     if (selectedPoint) {
-      // Update point position
       const newRegions = regions.map(region => 
         region.id === selectedPoint.regionId
           ? {
@@ -254,7 +239,6 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
       );
       setRegions(newRegions);
     } else if (isDrawing && activeRegion) {
-      // Update region while drawing
       if (drawType === 'rectangle') {
         const startPoint = activeRegion.points[0];
         const newRegions = regions.map(region =>
@@ -272,7 +256,6 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
         );
         setRegions(newRegions);
       } else {
-        // For quadrilateral, just update the last point
         const newRegions = regions.map(region =>
           region.id === activeRegion.id
             ? {
@@ -337,7 +320,7 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
 
   const pasteRegion = () => {
     if (copiedRegion) {
-      const offset = 20; // Offset for pasted region
+      const offset = 20;
       const newRegion: Region = {
         ...copiedRegion,
         id: Date.now().toString(),
@@ -361,27 +344,27 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap gap-4 mb-4">
-        <div>
-          <label className="block text-sm font-medium mb-1">Mode</label>
+    <div className="space-y-6">
+      <div className="flex flex-wrap gap-4">
+        <div className="flex-1 min-w-0">
+          <label className="block text-sm font-medium mb-2">Mode</label>
           <div className="flex gap-2">
             <button
               onClick={() => setMode('draw')}
-              className={`px-3 py-1 rounded ${
+              className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
                 mode === 'draw' 
-                  ? 'bg-blue-600 text-white' 
-                  : 'bg-gray-200 dark:bg-gray-700'
+                  ? 'bg-blue-600 text-white shadow-md' 
+                  : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'
               }`}
             >
               Draw
             </button>
             <button
               onClick={() => setMode('edit')}
-              className={`px-3 py-1 rounded ${
+              className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
                 mode === 'edit' 
-                  ? 'bg-blue-600 text-white' 
-                  : 'bg-gray-200 dark:bg-gray-700'
+                  ? 'bg-blue-600 text-white shadow-md' 
+                  : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'
               }`}
             >
               Edit
@@ -390,40 +373,42 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
         </div>
 
         {mode === 'draw' && (
-          <div>
-            <label className="block text-sm font-medium mb-1">Shape</label>
+          <div className="flex-1 min-w-0">
+            <label className="block text-sm font-medium mb-2">Shape</label>
             <div className="flex gap-2">
               <button
                 onClick={() => setDrawType('rectangle')}
-                className={`px-3 py-1 rounded ${
+                className={`flex items-center px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
                   drawType === 'rectangle' 
-                    ? 'bg-blue-600 text-white' 
-                    : 'bg-gray-200 dark:bg-gray-700'
+                    ? 'bg-blue-600 text-white shadow-md' 
+                    : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'
                 }`}
               >
+                <Square size={16} className="mr-2" />
                 Rectangle
               </button>
               <button
                 onClick={() => setDrawType('quadrilateral')}
-                className={`px-3 py-1 rounded ${
+                className={`flex items-center px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
                   drawType === 'quadrilateral' 
-                    ? 'bg-blue-600 text-white' 
-                    : 'bg-gray-200 dark:bg-gray-700'
+                    ? 'bg-blue-600 text-white shadow-md' 
+                    : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'
                 }`}
               >
+                <Pentagon size={16} className="mr-2" />
                 Quadrilateral
               </button>
             </div>
           </div>
         )}
 
-        <div className="flex gap-2 items-end">
+        <div className="flex gap-2">
           <button
             onClick={copyRegion}
             disabled={!selectedRegion}
-            className={`p-2 rounded ${
+            className={`p-2 rounded-lg transition-all duration-200 ${
               selectedRegion 
-                ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg' 
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'
             }`}
             title="Copy (Ctrl+C)"
@@ -433,9 +418,9 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
           <button
             onClick={pasteRegion}
             disabled={!copiedRegion}
-            className={`p-2 rounded ${
+            className={`p-2 rounded-lg transition-all duration-200 ${
               copiedRegion 
-                ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg' 
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'
             }`}
             title="Paste (Ctrl+V)"
@@ -445,9 +430,9 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
           <button
             onClick={history.undo}
             disabled={history.past.length === 0}
-            className={`p-2 rounded ${
+            className={`p-2 rounded-lg transition-all duration-200 ${
               history.past.length > 0
-                ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg' 
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'
             }`}
             title="Undo (Ctrl+Z)"
@@ -457,9 +442,9 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
           <button
             onClick={history.redo}
             disabled={history.future.length === 0}
-            className={`p-2 rounded ${
+            className={`p-2 rounded-lg transition-all duration-200 ${
               history.future.length > 0
-                ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg' 
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'
             }`}
             title="Redo (Ctrl+Y)"
@@ -469,46 +454,94 @@ const RegionSelector: React.FC<RegionSelectorProps> = ({ imageUrl, onRegionsChan
         </div>
       </div>
 
-      <div className="relative" ref={containerRef} style={{ height: '400px' }}>
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+        <div className="flex items-start space-x-2">
+          <Info size={16} className="text-blue-500 mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-blue-700 dark:text-blue-300">
+            <p className="font-medium mb-1">How to use:</p>
+            <ul className="space-y-1 text-xs">
+              <li>• <strong>Draw mode:</strong> Click to create new parking space regions</li>
+              <li>• <strong>Edit mode:</strong> Click and drag points to adjust regions</li>
+              <li>• Use keyboard shortcuts: Ctrl+C (copy), Ctrl+V (paste), Ctrl+Z (undo)</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div className="relative" ref={containerRef}>
         <canvas
           ref={canvasRef}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          className="border border-gray-300 dark:border-gray-600 rounded-lg cursor-crosshair"
-          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+          className="border border-gray-300 dark:border-gray-600 rounded-lg cursor-crosshair w-full shadow-lg"
+          style={{ maxWidth: '100%', height: 'auto' }}
         />
       </div>
 
-      <div className="space-y-2">
-        <h3 className="font-medium">Regions ({regions.length})</h3>
-        <div className="space-y-1">
-          {regions.map((region) => (
-            <div 
-              key={region.id}
-              className={`flex items-center justify-between p-2 rounded transition-colors ${
-                region === selectedRegion
-                  ? 'bg-blue-100 dark:bg-blue-900'
-                  : 'bg-gray-100 dark:bg-gray-700'
-              }`}
-              onClick={() => setSelectedRegion(region)}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold">Parking Regions ({regions.length})</h3>
+          {regions.length > 0 && (
+            <button
+              onClick={() => {
+                setRegions([]);
+                setSelectedRegion(null);
+                setActiveRegion(null);
+                history.addToHistory([]);
+              }}
+              className="text-sm text-red-500 hover:text-red-600 transition-colors"
             >
-              <span>
-                {region.type} - {region.points.length} points
-              </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteRegion(region.id);
-                }}
-                className="text-red-500 hover:text-red-600"
-              >
-                <Trash size={16} />
-              </button>
-            </div>
-          ))}
+              Clear All
+            </button>
+          )}
         </div>
+        
+        {regions.length === 0 ? (
+          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+            <Square size={32} className="mx-auto mb-2 opacity-50" />
+            <p>No regions defined yet</p>
+            <p className="text-sm">Draw regions to define parking spaces</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {regions.map((region, index) => (
+              <div 
+                key={region.id}
+                className={`flex items-center justify-between p-3 rounded-lg border transition-all duration-200 cursor-pointer hover:shadow-md ${
+                  region === selectedRegion
+                    ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700'
+                    : 'bg-gray-100 dark:bg-gray-700 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+                onClick={() => setSelectedRegion(region)}
+              >
+                <div className="flex items-center space-x-3">
+                  {region.type === 'rectangle' ? (
+                    <Square size={16} className="text-blue-500" />
+                  ) : (
+                    <Pentagon size={16} className="text-blue-500" />
+                  )}
+                  <div>
+                    <span className="font-medium">Region {index + 1}</span>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {region.type} • {region.points.length} points
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteRegion(region.id);
+                  }}
+                  className="text-red-500 hover:text-red-600 p-1 rounded transition-colors"
+                >
+                  <Trash size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

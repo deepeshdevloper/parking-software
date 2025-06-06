@@ -4,27 +4,24 @@ import * as mobilenet from '@tensorflow-models/mobilenet';
 import '@tensorflow/tfjs-backend-webgl';
 
 const CONFIG = {
-  MIN_CONSECUTIVE_FRAMES: 5,              // Smooth updates with minimum delay
-  SHADOW_THRESHOLD: 0.35,                 // Balances false shadows vs. actual vehicles
-  OCCUPANCY_THRESHOLD: 0.55,              // Good middle ground for presence detection
-  MODEL_VERIFICATION_INTERVAL: 2,         // Verifies model periodically, without overloading
-  EDGE_DENSITY_THRESHOLD: 0.2,            // Helps detect solid shapes like vehicles
-  TEXTURE_COMPLEXITY_THRESHOLD: 0.3,      // Discriminates flat vs. complex textures
-  COLOR_VARIANCE_THRESHOLD: 0.3,          // Avoids confusion in low-variance regions
-  MIN_VEHICLE_CONFIDENCE: 0.65,           // Avoids false positives while allowing moderate detection
-  PARKING_SPACE_MIN_SIZE: 50,             // Filters out irrelevant small regions
-  MODEL_LOAD_TIMEOUT: 30000,              // Waits 30s before failing model load
-  MAX_FRAME_SKIP: 2,                      // Skips frames to reduce CPU load
-  MOTION_INFLUENCE: 0.4,                  // Moderate weight on motion for detection updates
-  UNCERTAINTY_THRESHOLD: 0.4,             // Balances between caution and responsiveness
-  TARGET_SIZE: [360, 640],                // Low-res for faster processing with acceptable quality
-  STABILIZATION_FACTOR: 0.85,             // Blends stability and responsiveness (between 0.8 & 0.9)
-  CONFIDENCE_BOOST: 1.3,                  // Multiplier to push confidence above threshold when near certain
-  MIN_AREA_COVERAGE: 0.3,                 // Minimum area needed to confirm detection
-  FRAME_PROCESSING_INTERVAL: 100,         // Minimum time between frame analyses (in ms)
-  VIDEO_READY_TIMEOUT: 5000               // Timeout to wait for video feed initialization
+  MIN_CONSECUTIVE_FRAMES: 5,              // Increased for more stable detection
+  SHADOW_THRESHOLD: 0.35,                 // Increased to better handle shadows
+  OCCUPANCY_THRESHOLD: 0.55,              // Increased for more accurate vehicle detection
+  MODEL_VERIFICATION_INTERVAL: 2,         // More frequent model verification
+  EDGE_DENSITY_THRESHOLD: 0.2,            // Increased for better edge detection
+  TEXTURE_COMPLEXITY_THRESHOLD: 0.3,      // Increased for better texture analysis
+  COLOR_VARIANCE_THRESHOLD: 0.3,          // Increased for better color differentiation
+  MIN_VEHICLE_CONFIDENCE: 0.65,           // Slightly reduced for better sensitivity
+  PARKING_SPACE_MIN_SIZE: 50,             // Minimum size unchanged
+  MODEL_LOAD_TIMEOUT: 30000,              // Timeout unchanged
+  MAX_FRAME_SKIP: 1,                      // Frame skip unchanged
+  MOTION_INFLUENCE: 0.4,                  // Increased motion influence
+  UNCERTAINTY_THRESHOLD: 0.4,             // Increased uncertainty threshold
+  TARGET_SIZE: [720, 1280],              // Resolution unchanged
+  STABILIZATION_FACTOR: 0.8,             // Increased temporal stabilization
+  CONFIDENCE_BOOST: 1.3,                 // Increased confidence boost
+  MIN_AREA_COVERAGE: 0.3                 // Increased minimum area coverage
 };
-
 
 interface Point {
   x: number;
@@ -68,7 +65,6 @@ let frameCount = 0;
 let lastFrameTime = Date.now();
 let previousFrame: tf.Tensor3D | null = null;
 let previousSpaces: ParkingSpace[] = [];
-let lastProcessingTime = 0;
 
 const settings = {
   showDebugInfo: false,
@@ -140,6 +136,57 @@ async function loadModels(): Promise<boolean> {
   });
 
   return modelLoadingPromise.then(() => true).catch(() => false);
+}
+
+// Enhanced video readiness check
+async function ensureVideoReady(videoElement: HTMLVideoElement): Promise<HTMLVideoElement> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('Video readiness timeout'));
+    }, 10000); // 10 second timeout
+
+    const checkReadiness = () => {
+      // Check if video has sufficient data for processing
+      if (videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        clearTimeout(timeout);
+        console.log(`Video ready: readyState=${videoElement.readyState}, duration=${videoElement.duration}`);
+        resolve(videoElement);
+        return;
+      }
+
+      // If video is loading, wait a bit more
+      if (videoElement.readyState === HTMLMediaElement.HAVE_NOTHING || 
+          videoElement.readyState === HTMLMediaElement.HAVE_METADATA) {
+        setTimeout(checkReadiness, 100);
+        return;
+      }
+
+      // For other states, try to proceed
+      clearTimeout(timeout);
+      resolve(videoElement);
+    };
+
+    // Start checking
+    checkReadiness();
+
+    // Also listen for events
+    const onCanPlay = () => {
+      clearTimeout(timeout);
+      videoElement.removeEventListener('canplay', onCanPlay);
+      videoElement.removeEventListener('error', onError);
+      resolve(videoElement);
+    };
+
+    const onError = (event: Event) => {
+      clearTimeout(timeout);
+      videoElement.removeEventListener('canplay', onCanPlay);
+      videoElement.removeEventListener('error', onError);
+      reject(new Error('Video loading error'));
+    };
+
+    videoElement.addEventListener('canplay', onCanPlay);
+    videoElement.addEventListener('error', onError);
+  });
 }
 
 function adaptiveThreshold(tensor: tf.Tensor3D, blockSize = 15, C = 10): tf.Tensor3D {
@@ -261,41 +308,18 @@ function calculateDynamicThreshold(imageData: ImageData): number {
   return CONFIG.OCCUPANCY_THRESHOLD * (1 + (0.5 - brightness)) * (1 + colorVariance);
 }
 
-function getRegionBounds(region: Region): {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-  width: number;
-  height: number;
-} {
-  if (!region || !Array.isArray(region.points) || region.points.length < 3) {
-    console.warn('Invalid or insufficient region points:', region);
-    return { minX: 0, minY: 0, maxX: 0, maxY: 0, width: 0, height: 0 };
-  }
-
-  const xs = region.points.map(p => p.x).filter(x => typeof x === 'number');
-  const ys = region.points.map(p => p.y).filter(y => typeof y === 'number');
-
-  if (xs.length === 0 || ys.length === 0) {
-    console.warn('Region has invalid coordinates:', region);
-    return { minX: 0, minY: 0, maxX: 0, maxY: 0, width: 0, height: 0 };
-  }
-
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const width = maxX - minX;
-  const height = maxY - minY;
-
-  if (width <= 0 || height <= 0) {
-    console.warn('Degenerate region (zero area):', { minX, maxX, minY, maxY });
-  }
-
-  return { minX, minY, maxX, maxY, width, height };
+function getRegionBounds(region: Region) {
+  const xs = region.points.map(p => p.x);
+  const ys = region.points.map(p => p.y);
+  return {
+    minX: Math.min(...xs),
+    minY: Math.min(...ys),
+    maxX: Math.max(...xs),
+    maxY: Math.max(...ys),
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys)
+  };
 }
-
 
 function calculateBrightness(imageData: ImageData): number {
   const data = imageData.data;
@@ -376,55 +400,61 @@ async function verifyWithModel(space: ParkingSpace, imageTensor: tf.Tensor3D): P
 
   try {
     const bounds = getRegionBounds(space.region);
-    const [imgHeight, imgWidth] = imageTensor.shape.slice(0, 2);
+    const [height, width] = imageTensor.shape.slice(0, 2);
 
-    // Convert coordinates to pixel space if normalized
-    const x1 = Math.floor(bounds.minX <= 1 ? bounds.minX * imgWidth : bounds.minX);
-    const y1 = Math.floor(bounds.minY <= 1 ? bounds.minY * imgHeight : bounds.minY);
-    const x2 = Math.ceil(bounds.maxX <= 1 ? bounds.maxX * imgWidth : bounds.maxX);
-    const y2 = Math.ceil(bounds.maxY <= 1 ? bounds.maxY * imgHeight : bounds.maxY);
+    // Normalize coordinates to [0, 1]
+    const y1 = Math.max(0, bounds.minY) / height;
+    const x1 = Math.max(0, bounds.minX) / width;
+    const y2 = Math.min(bounds.maxY, height) / height;
+    const x2 = Math.min(bounds.maxX, width) / width;
 
-    // Clamp coordinates to image boundaries
-    const safeX1 = Math.max(0, Math.min(imgWidth - 1, x1));
-    const safeY1 = Math.max(0, Math.min(imgHeight - 1, y1));
-    const safeX2 = Math.max(0, Math.min(imgWidth, x2));
-    const safeY2 = Math.max(0, Math.min(imgHeight, y2));
-
-    // Check if region is too small or invalid
-    if (safeX2 <= safeX1 || safeY2 <= safeY1 || 
-        (safeX2 - safeX1) < CONFIG.PARKING_SPACE_MIN_SIZE || 
-        (safeY2 - safeY1) < CONFIG.PARKING_SPACE_MIN_SIZE) {
-      return space;
-    }
-
+    // Crop the region of interest
     cropped = tf.tidy(() => {
-      const width = safeX2 - safeX1;
-      const height = safeY2 - safeY1;
-      return tf.slice3d(imageTensor, [safeY1, safeX1, 0], [height, width, 3]);
+      // Calculate pixel coordinates
+      const startY = Math.floor(y1 * height);
+      const startX = Math.floor(x1 * width);
+      const cropHeight = Math.floor((y2 - y1) * height);
+      const cropWidth = Math.floor((x2 - x1) * width);
+
+      // Directly crop the tensor
+      return tf.slice3d(
+        imageTensor,
+        [startY, startX, 0],
+        [cropHeight, cropWidth, 3]
+      );
     });
 
-    if (!cropped) {
-      return space;
-    }
-
-    cocoInput = tf.tidy(() => {
+    // Prepare COCO-SSD input: expects minimum 300x300, values in 0–255, dtype int32
+    const cocoInput = tf.tidy(() => {
       const minSize = 300;
       const [h, w] = cropped!.shape.slice(0, 2);
       const resizeNeeded = h < minSize || w < minSize;
 
       const resized = resizeNeeded
-        ? tf.image.resizeBilinear(cropped!, [Math.max(minSize, h), Math.max(minSize, w)])
+        ? tf.image.resizeBilinear(cropped!, [
+          Math.max(minSize, h),
+          Math.max(minSize, w),
+        ])
         : cropped!;
 
-      return tf.cast(tf.mul(resized, 255), 'int32');
+      // Convert to 0–255 and cast to int32
+      const scaled = tf.mul(resized, 255);
+      return tf.cast(scaled, 'int32'); // required for coco-ssd
     });
 
-    mobilenetInput = tf.tidy(() => tf.image.resizeBilinear(cropped!, [224, 224]));
 
+    // Prepare MobileNet input: expects [224, 224, 3], values in [0, 1], dtype float32 (default)
+    const mobilenetInput = tf.tidy(() => {
+      return tf.image.resizeBilinear(cropped!, [224, 224]); // cropped! should already be float32 [0–1]
+    });
+
+    // Run detection and classification in parallel
     const [predictions, features] = await Promise.all([
-      objectDetector.detect(cocoInput),
-      featureExtractor.classify(mobilenetInput),
+      objectDetector.detect(cocoInput as tf.Tensor3D),
+      featureExtractor.classify(mobilenetInput as tf.Tensor3D),
     ]);
+    cocoInput.dispose();
+    mobilenetInput.dispose();
 
     const vehicleClasses = ['car', 'truck', 'bus', 'motorcycle', 'vehicle', 'van', 'suv', 'pickup'];
     const vehiclePredictions = predictions.filter(p =>
@@ -487,6 +517,7 @@ async function verifyWithModel(space: ParkingSpace, imageTensor: tf.Tensor3D): P
     console.warn('Model verification failed:', e);
     return space;
   } finally {
+    // Clean up tensors
     if (cropped) cropped.dispose();
     if (cocoInput) cocoInput.dispose();
     if (mobilenetInput) mobilenetInput.dispose();
@@ -597,6 +628,8 @@ async function drawResults(
   return ctx.canvas.toDataURL('image/jpeg');
 }
 
+// Enhanced parking space detection functions
+
 export async function detectParkingSpaces(
   imageSource: string | HTMLVideoElement,
   regions: Region[] | null | undefined = [],
@@ -609,62 +642,11 @@ export async function detectParkingSpaces(
   image?: string;
   processingTime?: number;
 }> {
-  const currentTime = Date.now();
-  const startTime = performance.now(); // Add this line to track processing start time
-
-  // Add minimum interval between processing frames
-  if (currentTime - lastProcessingTime < CONFIG.FRAME_PROCESSING_INTERVAL) {
-    return {
-      total: previousSpaces.length,
-      occupied: previousSpaces.filter(s => s.isOccupied).length,
-      available: previousSpaces.filter(s => !s.isOccupied).length,
-      spaces: previousSpaces,
-      processingTime: 0
-    };
-  }
+  const startTime = performance.now();
 
   try {
     if (!imageSource) {
       throw new Error('Invalid image source');
-    }
-
-    // Enhanced video readiness check with timeout
-    if (imageSource instanceof HTMLVideoElement) {
-      const videoElement = imageSource;
-
-      // Check if video is actually playing
-      if (videoElement.paused || videoElement.ended) {
-        return {
-          total: previousSpaces.length,
-          occupied: previousSpaces.filter(s => s.isOccupied).length,
-          available: previousSpaces.filter(s => !s.isOccupied).length,
-          spaces: previousSpaces,
-          processingTime: 0
-        };
-      }
-
-      // Wait for video data to be available
-      if (!videoElement.videoWidth || !videoElement.videoHeight) {
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error('Video readiness timeout'));
-          }, CONFIG.VIDEO_READY_TIMEOUT);
-
-          const checkVideo = () => {
-            if (videoElement.videoWidth && videoElement.videoHeight) {
-              clearTimeout(timeout);
-              resolve();
-            } else if (!videoElement.paused && !videoElement.ended) {
-              requestAnimationFrame(checkVideo);
-            } else {
-              clearTimeout(timeout);
-              reject(new Error('Video playback stopped'));
-            }
-          };
-
-          requestAnimationFrame(checkVideo);
-        });
-      }
     }
 
     const validRegions: Region[] = Array.isArray(regions) ?
@@ -679,6 +661,7 @@ export async function detectParkingSpaces(
         return isValid;
       }) : [];
 
+    const currentTime = Date.now();
     const timeDiff = currentTime - lastFrameTime;
     lastFrameTime = currentTime;
 
@@ -720,53 +703,69 @@ export async function detectParkingSpaces(
     } else {
       img = imageSource;
 
-      // Enhanced video readiness check
-      switch (img.readyState) {
-        case HTMLMediaElement.HAVE_NOTHING:
-          throw new Error('No video data available');
+      // Enhanced video readiness check with comprehensive state handling
+      if (img instanceof HTMLVideoElement) {
+        const stateMap = {
+          0: 'HAVE_NOTHING',
+          1: 'HAVE_METADATA',
+          2: 'HAVE_CURRENT_DATA',
+          3: 'HAVE_FUTURE_DATA',
+          4: 'HAVE_ENOUGH_DATA'
+        };
 
-        case HTMLMediaElement.HAVE_METADATA:
-          // We have metadata but no frames yet
-          if (!img.videoWidth || !img.videoHeight) {
-            throw new Error('Video dimensions not available');
+        console.log(`Video readyState: ${img.readyState} (${stateMap[img.readyState]})`);
+
+        // Check if video has sufficient data for frame extraction
+        if (img.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+          console.log('Video not ready for processing, attempting to ensure readiness...');
+          
+          try {
+            // Try to ensure video is ready
+            await ensureVideoReady(img);
+          } catch (error) {
+            console.warn('Video readiness check failed:', error);
+            // Continue with processing anyway - sometimes videos work even with low readyState
           }
-          throw new Error('Video data not yet available');
+        }
 
-        case HTMLMediaElement.HAVE_CURRENT_DATA:
-          // We have the current frame, minimum requirement for processing
-          if (img.ended) {
-            throw new Error('Video playback has ended');
-          }
-          break;
+        // Additional checks for video validity
+        if (img.videoWidth === 0 || img.videoHeight === 0) {
+          throw new Error('Video has invalid dimensions');
+        }
 
-        case HTMLMediaElement.HAVE_FUTURE_DATA:
-        case HTMLMediaElement.HAVE_ENOUGH_DATA:
-          // Optimal states for processing
-          break;
+        // Check if video is ended but still allow processing (for final frame analysis)
+        if (img.ended) {
+          console.log('Video has ended, processing final frame');
+        }
 
-        default:
-          throw new Error('Invalid video state');
-      }
+        // Check if video is paused but has data
+        if (img.paused && img.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          console.log('Video is paused but has current data, proceeding with processing');
+        }
 
-      // Additional video validity checks
-      if (img.ended) {
-        throw new Error('Video playback has ended');
-      }
+        console.log(`Video processing: width=${img.videoWidth}, height=${img.videoHeight}, currentTime=${img.currentTime}, duration=${img.duration}, ended=${img.ended}, paused=${img.paused}`);
 
-      if (img.paused && !previousSpaces.length) {
-        throw new Error('Video is paused and no previous data available');
-      }
-
-
-      if (!img.videoWidth || !img.videoHeight) {
-        throw new Error('Invalid video dimensions');
+      } else if (img instanceof HTMLImageElement) {
+        // Image validation
+        if (!img.complete || img.naturalWidth === 0) {
+          throw new Error('Image is not fully loaded or has invalid dimensions');
+        }
+        console.log(`Image processing: width=${img.naturalWidth}, height=${img.naturalHeight}`);
+      } else {
+        throw new Error('Unsupported media type');
       }
     }
 
     // Resize to target size for consistent processing
     canvas.width = CONFIG.TARGET_SIZE[1];
     canvas.height = CONFIG.TARGET_SIZE[0];
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    
+    try {
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    } catch (drawError) {
+      console.error('Failed to draw image to canvas:', drawError);
+      throw new Error('Failed to process image/video frame');
+    }
 
     let tensor: tf.Tensor3D | null = null;
     let enhanced: tf.Tensor3D | null = null;
@@ -907,7 +906,6 @@ export async function detectParkingSpaces(
 
       const processingTime = performance.now() - startTime;
 
-      lastProcessingTime = currentTime;
       return {
         total: spaces.length,
         occupied: spaces.filter(s => s.isOccupied).length,

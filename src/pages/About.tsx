@@ -1,135 +1,163 @@
 import React from 'react';
 import { useSettings } from '../context/SettingsContext';
-import { Github, Mail, Globe, Camera, Users, Cloud, Shield, Cpu } from 'lucide-react';
+import { Github, Mail, Globe, Camera, Users, Cloud, Shield, Cpu, Smartphone, Monitor, Tablet } from 'lucide-react';
 
 const About: React.FC = () => {
-  const { settings } = useSettings();
+  const { settings, isMobile, isTablet } = useSettings();
   
   return (
-    <div className={`${settings.enableDarkMode ? 'text-white' : 'text-gray-800'}`}>
-      <h1 className="text-2xl font-bold mb-6">About ParkSense AI</h1>
-      
-      <div className={`p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow mb-6`}>
-        <h2 className="text-xl font-semibold mb-4">Overview</h2>
-        <p className="mb-4">
-          ParkSense AI is an advanced parking space detection system designed to identify empty and occupied parking spaces 
-          using computer vision and machine learning technologies. The system works with both static images and live video 
-          feeds from cameras installed in parking areas.
-        </p>
-        <p>
-          Our robust algorithms are designed to work in various environmental conditions, including different 
-          weather conditions, varying lighting, and can filter out non-vehicle objects such as humans and animals 
-          for accurate detection results.
-        </p>
+    <div className={`${settings.enableDarkMode ? 'text-white' : 'text-gray-800'} space-y-4 sm:space-y-6`}>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold">About ParkSense AI</h1>
+        <div className="flex items-center gap-2 text-sm">
+          {isMobile && <Smartphone size={16} className="text-blue-500" />}
+          {isTablet && <Tablet size={16} className="text-blue-500" />}
+          {!isMobile && !isTablet && <Monitor size={16} className="text-blue-500" />}
+          <span className={settings.enableDarkMode ? 'text-gray-400' : 'text-gray-600'}>
+            Optimized for {isMobile ? 'Mobile' : isTablet ? 'Tablet' : 'Desktop'}
+          </span>
+        </div>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-        <div className={`p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow`}>
-          <h2 className="text-xl font-semibold mb-4">Key Features</h2>
-          <ul className="space-y-3">
+      <div className={`p-4 sm:p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm sm:shadow-md`}>
+        <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Overview</h2>
+        <div className="space-y-3 sm:space-y-4">
+          <p className="text-sm sm:text-base leading-relaxed">
+            ParkSense AI is an advanced parking space detection system designed to identify empty and occupied parking spaces 
+            using computer vision and machine learning technologies. The system works with both static images and live video 
+            feeds from cameras installed in parking areas.
+          </p>
+          <p className="text-sm sm:text-base leading-relaxed">
+            Our robust algorithms are designed to work in various environmental conditions, including different 
+            weather conditions, varying lighting, and can filter out non-vehicle objects such as humans and animals 
+            for accurate detection results.
+          </p>
+        </div>
+      </div>
+      
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+        <div className={`p-4 sm:p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm sm:shadow-md`}>
+          <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Key Features</h2>
+          <div className="space-y-3 sm:space-y-4">
             <FeatureItem 
-              icon={<Camera size={20} />}
+              icon={<Camera size={isMobile ? 18 : 20} />}
               title="Multi-source Input"
               description="Process both static images and live video feeds from cameras"
+              isMobile={isMobile}
             />
             <FeatureItem 
-              icon={<Cloud size={20} />}
+              icon={<Cloud size={isMobile ? 18 : 20} />}
               title="Weather Resistant"
               description="Accurate detection in rain, snow, and varying light conditions"
+              isMobile={isMobile}
             />
             <FeatureItem 
-              icon={<Users size={20} />}
+              icon={<Users size={isMobile ? 18 : 20} />}
               title="Object Filtering"
               description="Ignore humans, animals, and other non-vehicle objects"
+              isMobile={isMobile}
             />
             <FeatureItem 
-              icon={<Cpu size={20} />}
+              icon={<Cpu size={isMobile ? 18 : 20} />}
               title="Real-time Processing"
               description="Fast detection and analysis for immediate results"
+              isMobile={isMobile}
             />
-          </ul>
+          </div>
         </div>
         
-        <div className={`p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow`}>
-          <h2 className="text-xl font-semibold mb-4">Technology</h2>
-          <p className="mb-4">
-            ParkSense AI leverages state-of-the-art technologies:
-          </p>
-          <ul className="list-disc pl-5 space-y-2 mb-4">
-            <li>TensorFlow.js for in-browser machine learning</li>
-            <li>React for the user interface</li>
-            <li>Computer vision algorithms for object detection</li>
-            <li>Weather-resistant image processing techniques</li>
-            <li>Real-time data analytics and visualization</li>
-          </ul>
-          <p>
-            All processing happens locally in your browser, ensuring privacy and reducing the need for server infrastructure.
-          </p>
+        <div className={`p-4 sm:p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm sm:shadow-md`}>
+          <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Technology</h2>
+          <div className="space-y-3 sm:space-y-4">
+            <p className="text-sm sm:text-base leading-relaxed">
+              ParkSense AI leverages state-of-the-art technologies:
+            </p>
+            <ul className="list-disc pl-4 sm:pl-5 space-y-1 sm:space-y-2 text-sm sm:text-base">
+              <li>TensorFlow.js for in-browser machine learning</li>
+              <li>React for the user interface</li>
+              <li>Computer vision algorithms for object detection</li>
+              <li>Weather-resistant image processing techniques</li>
+              <li>Real-time data analytics and visualization</li>
+            </ul>
+            <p className="text-sm sm:text-base leading-relaxed">
+              All processing happens locally in your browser, ensuring privacy and reducing the need for server infrastructure.
+            </p>
+          </div>
         </div>
       </div>
       
-      <div className={`p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow mb-6`}>
-        <h2 className="text-xl font-semibold mb-4">How It Works</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className={`p-4 sm:p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm sm:shadow-md`}>
+        <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">How It Works</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           <StepCard 
             number="1"
             title="Input Source"
             description="Upload an image or connect to a live camera feed from your parking area"
             darkMode={settings.enableDarkMode}
+            isMobile={isMobile}
           />
           <StepCard 
             number="2"
             title="AI Processing"
             description="Our algorithms analyze the image to identify parking spaces and detect vehicles"
             darkMode={settings.enableDarkMode}
+            isMobile={isMobile}
           />
           <StepCard 
             number="3"
             title="Results & Analysis"
             description="View detection results with visual indicators and occupancy statistics"
             darkMode={settings.enableDarkMode}
+            isMobile={isMobile}
           />
         </div>
       </div>
       
-      <div className={`p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow`}>
-        <h2 className="text-xl font-semibold mb-4">Contact & Support</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <p className="mb-4">
+      <div className={`p-4 sm:p-6 rounded-lg ${settings.enableDarkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm sm:shadow-md`}>
+        <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Contact & Support</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+          <div className="space-y-3 sm:space-y-4">
+            <p className="text-sm sm:text-base leading-relaxed">
               Have questions or feedback about ParkSense AI? We'd love to hear from you!
             </p>
-            <div className="space-y-3">
+            <div className="space-y-2 sm:space-y-3">
               <ContactItem 
-                icon={<Mail size={20} />}
+                icon={<Mail size={isMobile ? 18 : 20} />}
                 label="Email"
                 value="support@parksense.ai"
+                isMobile={isMobile}
               />
               <ContactItem 
-                icon={<Globe size={20} />}
+                icon={<Globe size={isMobile ? 18 : 20} />}
                 label="Website"
                 value="www.parksense.ai"
+                isMobile={isMobile}
               />
               <ContactItem 
-                icon={<Github size={20} />}
+                icon={<Github size={isMobile ? 18 : 20} />}
                 label="GitHub"
                 value="github.com/parksense-ai"
+                isMobile={isMobile}
               />
             </div>
           </div>
-          <div>
-            <h3 className="font-semibold mb-2">Privacy & Security</h3>
-            <div className="flex mb-4">
-              <Shield size={20} className="mr-2 flex-shrink-0 text-green-500" />
-              <p className={settings.enableDarkMode ? 'text-gray-300' : 'text-gray-600'}>
-                ParkSense AI processes all data locally in your browser. No images or video feeds are sent 
-                to external servers, ensuring your data remains private and secure.
+          <div className="space-y-3 sm:space-y-4">
+            <div>
+              <h3 className="font-semibold mb-2 text-sm sm:text-base">Privacy & Security</h3>
+              <div className="flex items-start gap-2 sm:gap-3">
+                <Shield size={isMobile ? 18 : 20} className="mt-0.5 flex-shrink-0 text-green-500" />
+                <p className={`text-xs sm:text-sm leading-relaxed ${settings.enableDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                  ParkSense AI processes all data locally in your browser. No images or video feeds are sent 
+                  to external servers, ensuring your data remains private and secure.
+                </p>
+              </div>
+            </div>
+            <div>
+              <h3 className="font-semibold mb-2 text-sm sm:text-base">Version</h3>
+              <p className={`text-xs sm:text-sm ${settings.enableDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                ParkSense AI v1.0.0
               </p>
             </div>
-            <h3 className="font-semibold mb-2">Version</h3>
-            <p className={settings.enableDarkMode ? 'text-gray-300' : 'text-gray-600'}>
-              ParkSense AI v1.0.0
-            </p>
           </div>
         </div>
       </div>
@@ -141,17 +169,20 @@ interface FeatureItemProps {
   icon: React.ReactNode;
   title: string;
   description: string;
+  isMobile: boolean;
 }
 
-const FeatureItem: React.FC<FeatureItemProps> = ({ icon, title, description }) => {
+const FeatureItem: React.FC<FeatureItemProps> = ({ icon, title, description, isMobile }) => {
   return (
-    <li className="flex">
-      <div className="mr-3 text-blue-500">{icon}</div>
-      <div>
-        <h3 className="font-medium">{title}</h3>
-        <p className="text-sm text-gray-500 dark:text-gray-400">{description}</p>
+    <div className="flex items-start gap-2 sm:gap-3">
+      <div className="mt-0.5 text-blue-500 flex-shrink-0">{icon}</div>
+      <div className="min-w-0">
+        <h3 className="font-medium text-sm sm:text-base">{title}</h3>
+        <p className={`text-xs sm:text-sm leading-relaxed text-gray-500 dark:text-gray-400 ${isMobile ? 'mt-1' : 'mt-0.5'}`}>
+          {description}
+        </p>
       </div>
-    </li>
+    </div>
   );
 };
 
@@ -160,16 +191,21 @@ interface StepCardProps {
   title: string;
   description: string;
   darkMode: boolean;
+  isMobile: boolean;
 }
 
-const StepCard: React.FC<StepCardProps> = ({ number, title, description, darkMode }) => {
+const StepCard: React.FC<StepCardProps> = ({ number, title, description, darkMode, isMobile }) => {
   return (
-    <div className={`p-4 rounded-lg border ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-      <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold mb-3">
+    <div className={`p-3 sm:p-4 rounded-lg border transition-all duration-200 hover:shadow-md ${
+      darkMode ? 'border-gray-700 hover:border-gray-600' : 'border-gray-200 hover:border-gray-300'
+    }`}>
+      <div className={`${isMobile ? 'w-6 h-6 text-xs' : 'w-8 h-8 text-sm'} rounded-full bg-blue-500 text-white flex items-center justify-center font-bold mb-2 sm:mb-3`}>
         {number}
       </div>
-      <h3 className="font-semibold mb-2">{title}</h3>
-      <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{description}</p>
+      <h3 className="font-semibold mb-1 sm:mb-2 text-sm sm:text-base">{title}</h3>
+      <p className={`text-xs sm:text-sm leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+        {description}
+      </p>
     </div>
   );
 };
@@ -178,15 +214,18 @@ interface ContactItemProps {
   icon: React.ReactNode;
   label: string;
   value: string;
+  isMobile: boolean;
 }
 
-const ContactItem: React.FC<ContactItemProps> = ({ icon, label, value }) => {
+const ContactItem: React.FC<ContactItemProps> = ({ icon, label, value, isMobile }) => {
   return (
-    <div className="flex items-center">
-      <div className="mr-2 text-blue-500">{icon}</div>
-      <div>
-        <span className="font-medium mr-2">{label}:</span>
-        <span className="text-gray-500 dark:text-gray-400">{value}</span>
+    <div className="flex items-center gap-2 sm:gap-3">
+      <div className="text-blue-500 flex-shrink-0">{icon}</div>
+      <div className="min-w-0">
+        <span className={`font-medium ${isMobile ? 'text-sm' : 'text-base'}`}>{label}:</span>
+        <span className={`ml-1 sm:ml-2 text-gray-500 dark:text-gray-400 ${isMobile ? 'text-xs' : 'text-sm'} break-all`}>
+          {value}
+        </span>
       </div>
     </div>
   );

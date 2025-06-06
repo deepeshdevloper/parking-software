@@ -32,7 +32,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
       {/* Overlay for mobile */}
       {isOpen && (
         <div 
-          className="fixed inset-0 z-20 bg-black bg-opacity-50 md:hidden"
+          className="fixed inset-0 z-30 bg-black bg-opacity-50 transition-opacity duration-300 lg:hidden"
           onClick={() => setIsOpen(false)}
         />
       )}
@@ -41,52 +41,88 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
       <aside 
         className={`
           ${isOpen ? 'translate-x-0' : '-translate-x-full'} 
-          ${settings.enableDarkMode ? 'bg-gray-800 text-white' : 'bg-white'} 
-          fixed inset-y-0 left-0 z-30 w-64 transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:z-0
+          ${settings.enableDarkMode ? 'bg-gray-800 text-white border-r border-gray-700' : 'bg-white text-gray-800 border-r border-gray-200'} 
+          fixed inset-y-0 left-0 z-40 w-64 sm:w-72 transition-transform duration-300 ease-in-out 
+          lg:translate-x-0 lg:static lg:z-0 shadow-xl lg:shadow-none
+          flex flex-col
         `}
       >
-        <div className="flex h-full flex-col">
-          {/* Mobile close button */}
-          <div className="flex items-center justify-between p-4 md:hidden">
-            <div className="flex items-center space-x-2">
-              <div className="h-8 w-8 bg-blue-600 rounded-md flex items-center justify-center">
-                <span className="text-white font-bold">PS</span>
-              </div>
-              <span className="text-xl font-bold">ParkSense AI</span>
+        {/* Mobile header */}
+        <div className="flex items-center justify-between p-4 sm:p-6 lg:hidden border-b border-gray-200 dark:border-gray-700">
+          <div className="flex items-center space-x-3">
+            <div className="h-8 w-8 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center">
+              <span className="text-white font-bold text-sm">PS</span>
             </div>
-            <button 
-              onClick={() => setIsOpen(false)}
-              className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none"
-              aria-label="Close sidebar"
-            >
-              <X size={20} />
-            </button>
+            <div>
+              <span className="text-lg font-bold">ParkSense AI</span>
+              <p className={`text-xs ${settings.enableDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                Smart Parking Detection
+              </p>
+            </div>
           </div>
+          <button 
+            onClick={() => setIsOpen(false)}
+            className={`p-2 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              settings.enableDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
+            }`}
+            aria-label="Close sidebar"
+          >
+            <X size={20} />
+          </button>
+        </div>
 
-          {/* Navigation */}
-          <nav className="flex-1 space-y-1 p-4">
-            {routes.map((route) => (
-              <NavLink
-                key={route.path}
-                to={route.path}
-                onClick={() => setIsOpen(false)}
-                className={({ isActive }) => `
-                  flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors
-                  ${isActive 
-                    ? 'bg-blue-600 text-white' 
-                    : `${settings.enableDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`
-                  }
-                `}
-              >
+        {/* Desktop header */}
+        <div className="hidden lg:flex items-center space-x-3 p-6 border-b border-gray-200 dark:border-gray-700">
+          <div className="h-10 w-10 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center shadow-md">
+            <span className="text-white font-bold">PS</span>
+          </div>
+          <div>
+            <span className="text-xl font-bold">ParkSense AI</span>
+            <p className={`text-sm ${settings.enableDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+              Smart Parking Detection
+            </p>
+          </div>
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 p-4 sm:p-6 space-y-2 overflow-y-auto">
+          {routes.map((route) => (
+            <NavLink
+              key={route.path}
+              to={route.path}
+              onClick={() => setIsOpen(false)}
+              className={({ isActive }) => `
+                flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 group
+                ${isActive 
+                  ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg transform scale-[1.02]' 
+                  : `${settings.enableDarkMode 
+                      ? 'hover:bg-gray-700 text-gray-300 hover:text-white' 
+                      : 'hover:bg-gray-100 text-gray-700 hover:text-gray-900'
+                    } hover:transform hover:scale-[1.01]`
+                }
+              `}
+            >
+              <span className={`transition-transform duration-200 ${
+                'group-hover:scale-110'
+              }`}>
                 {icons[route.name]}
-                <span>{route.name}</span>
-              </NavLink>
-            ))}
-          </nav>
+              </span>
+              <span className="font-medium">{route.name}</span>
+            </NavLink>
+          ))}
+        </nav>
 
-          {/* Footer */}
-          <div className={`p-4 text-sm ${settings.enableDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-            <p>ParkSense AI v1.0.0</p>
+        {/* Footer */}
+        <div className={`p-4 sm:p-6 border-t border-gray-200 dark:border-gray-700 ${
+          settings.enableDarkMode ? 'text-gray-400' : 'text-gray-500'
+        }`}>
+          <div className="text-center">
+            <p className="text-sm font-medium">ParkSense AI</p>
+            <p className="text-xs mt-1">Version 1.0.0</p>
+            <div className="mt-3 flex justify-center">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+              <span className="ml-2 text-xs">System Online</span>
+            </div>
           </div>
         </div>
       </aside>

@@ -39,10 +39,28 @@ export const router = createBrowserRouter(
     {
       path: '/',
       element: <Layout><Outlet /></Layout>,
-      children: routes.map(route => ({
-        path: route.path === '/' ? '' : route.path,
-        element: <route.component />,
-      })),
+      children: [
+        {
+          path: '',
+          element: <Dashboard />,
+        },
+        {
+          path: 'live',
+          element: <LiveDetection />,
+        },
+        {
+          path: 'upload',
+          element: <ImageUpload />,
+        },
+        {
+          path: 'settings',
+          element: <Settings />,
+        },
+        {
+          path: 'about',
+          element: <About />,
+        },
+      ],
     },
   ],
   {
