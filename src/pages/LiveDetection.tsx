@@ -42,7 +42,16 @@ import {
   BarChart3,
   TrendingUp,
   Square,
-  StopCircle
+  StopCircle,
+  MapPin,
+  Layers,
+  Zap,
+  Users,
+  Car,
+  ArrowRight,
+  ArrowLeft,
+  Circle,
+  CheckSquare
 } from 'lucide-react';
 import { detectParkingSpaces } from '../utils/parkingDetection';
 import RegionSelector from '../components/RegionSelector';
@@ -122,6 +131,23 @@ interface VideoHealth {
   bufferHealth: number;
 }
 
+interface VehicleMovement {
+  spaceId: number;
+  timestamp: number;
+  action: 'entered' | 'exited';
+  confidence: number;
+  vehicleType?: string;
+  duration?: number; // Time spent in space for exited vehicles
+}
+
+interface SpaceOccupancyHistory {
+  spaceId: number;
+  enterTime?: number;
+  exitTime?: number;
+  totalOccupiedTime: number;
+  occupancyCount: number;
+}
+
 const STREAM_QUALITIES: StreamQuality[] = [
   { width: 320, height: 240, frameRate: 15, label: 'Low (320p)' },
   { width: 640, height: 480, frameRate: 24, label: 'Medium (480p)' },
@@ -129,12 +155,13 @@ const STREAM_QUALITIES: StreamQuality[] = [
   { width: 1920, height: 1080, frameRate: 30, label: 'Ultra (1080p)' }
 ];
 
-const DETECTION_INTERVAL = 3000; // Reduced to 3 seconds for better responsiveness
-const VIDEO_HEALTH_CHECK_INTERVAL = 500; // More frequent health checks
-const STALL_DETECTION_TIMEOUT = 2000; // Reduced timeout
+// Optimized detection intervals for better real-time tracking
+const DETECTION_INTERVAL = 1000; // 1 second for more responsive tracking
+const VIDEO_HEALTH_CHECK_INTERVAL = 500;
+const STALL_DETECTION_TIMEOUT = 2000;
 const MAX_RECOVERY_ATTEMPTS = 3;
-const VIDEO_LOAD_TIMEOUT = 20000; // Reduced timeout
-const BUFFER_HEALTH_THRESHOLD = 0.05; // Lower threshold
+const VIDEO_LOAD_TIMEOUT = 20000;
+const BUFFER_HEALTH_THRESHOLD = 0.05;
 
 const LiveDetection: React.FC = () => {
   const { settings, isMobile, isTablet } = useSettings();
@@ -188,6 +215,11 @@ const LiveDetection: React.FC = () => {
     available: number;
   } | null>(null);
   
+  // Enhanced Vehicle Movement Tracking
+  const [vehicleMovements, setVehicleMovements] = useState<VehicleMovement[]>([]);
+  const [recentMovements, setRecentMovements] = useState<VehicleMovement[]>([]);
+  const [spaceOccupancyHistory, setSpaceOccupancyHistory] = useState<Map<number, SpaceOccupancyHistory>>(new Map());
+  
   // UI State
   const [showSettings, setShowSettings] = useState(false);
   const [showRegionSelector, setShowRegionSelector] = useState(false);
@@ -196,6 +228,9 @@ const LiveDetection: React.FC = () => {
   const [showCrosshair, setShowCrosshair] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [regionsApplied, setRegionsApplied] = useState(false);
+  const [autoStartEnabled, setAutoStartEnabled] = useState(true);
+  const [detectionMode, setDetectionMode] = useState<'reference' | 'live'>('reference');
   
   // Canvas Settings
   const [showCanvas, setShowCanvas] = useState(true);
@@ -232,6 +267,7 @@ const LiveDetection: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
   const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const performanceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -245,6 +281,8 @@ const LiveDetection: React.FC = () => {
   const recoveryInProgressRef = useRef(false);
   const videoElementReadyRef = useRef(false);
   const lastVideoTimeRef = useRef(-1);
+  const detectionActiveRef = useRef(false);
+  const previousSpacesRef = useRef<ParkingSpace[]>([]);
   
   // Refs for current state values to avoid closure issues
   const isStreamingRef = useRef(isStreaming);
@@ -254,6 +292,7 @@ const LiveDetection: React.FC = () => {
   const videoCompletedRef = useRef(videoCompleted);
   const lastDetectionResultRef = useRef(lastDetectionResult);
   const isPausedRef = useRef(isPaused);
+  const regionsAppliedRef = useRef(regionsApplied);
   
   // Update refs whenever state changes
   useEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
@@ -263,104 +302,338 @@ const LiveDetection: React.FC = () => {
   useEffect(() => { videoCompletedRef.current = videoCompleted; }, [videoCompleted]);
   useEffect(() => { lastDetectionResultRef.current = lastDetectionResult; }, [lastDetectionResult]);
   useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
+  useEffect(() => { regionsAppliedRef.current = regionsApplied; }, [regionsApplied]);
 
-  // Draw parking space overlays on canvas
+  // Create initial parking spaces from regions for display
+  const createInitialSpaces = useCallback((regions: Region[]): ParkingSpace[] => {
+    return regions.map((region, index) => ({
+      id: index,
+      region,
+      isOccupied: false,
+      confidence: 0,
+      lastStateChange: Date.now(),
+      stateHistory: [],
+      features: {
+        nonZeroCount: 0,
+        brightness: 0,
+        edgeDensity: 0,
+        textureComplexity: 0,
+        perspectiveScore: 0,
+        heatmapScore: 0,
+        colorVariance: 0,
+        motionScore: 0,
+        shadowScore: 0,
+        stabilityScore: 0.5
+      }
+    }));
+  }, []);
+
+  // Enhanced vehicle movement tracking with occupancy duration
+  const trackVehicleMovements = useCallback((newSpaces: ParkingSpace[], previousSpaces: ParkingSpace[]) => {
+    const movements: VehicleMovement[] = [];
+    const timestamp = Date.now();
+
+    newSpaces.forEach(space => {
+      const previousSpace = previousSpaces.find(p => p.id === space.id);
+      if (previousSpace && previousSpace.isOccupied !== space.isOccupied) {
+        // Calculate duration for exiting vehicles
+        let duration: number | undefined;
+        if (!space.isOccupied && previousSpace.isOccupied) {
+          const occupancyRecord = spaceOccupancyHistory.get(space.id);
+          if (occupancyRecord?.enterTime) {
+            duration = timestamp - occupancyRecord.enterTime;
+          }
+        }
+
+        const movement: VehicleMovement = {
+          spaceId: space.id,
+          timestamp,
+          action: space.isOccupied ? 'entered' : 'exited',
+          confidence: space.confidence,
+          vehicleType: space.vehicleType,
+          duration
+        };
+        movements.push(movement);
+
+        // Update occupancy history
+        setSpaceOccupancyHistory(prev => {
+          const newHistory = new Map(prev);
+          const existing = newHistory.get(space.id) || {
+            spaceId: space.id,
+            totalOccupiedTime: 0,
+            occupancyCount: 0
+          };
+
+          if (space.isOccupied) {
+            // Vehicle entered
+            existing.enterTime = timestamp;
+            existing.occupancyCount += 1;
+          } else {
+            // Vehicle exited
+            if (existing.enterTime) {
+              const occupiedDuration = timestamp - existing.enterTime;
+              existing.totalOccupiedTime += occupiedDuration;
+              existing.exitTime = timestamp;
+              delete existing.enterTime;
+            }
+          }
+
+          newHistory.set(space.id, existing);
+          return newHistory;
+        });
+      }
+    });
+
+    if (movements.length > 0) {
+      setVehicleMovements(prev => [...prev, ...movements].slice(-100)); // Keep last 100 movements
+      setRecentMovements(movements);
+      
+      // Clear recent movements after 5 seconds
+      setTimeout(() => {
+        setRecentMovements([]);
+      }, 5000);
+
+      // Play audio notifications for movements
+      if (audioEnabled) {
+        movements.forEach(movement => {
+          playNotificationSound(movement.action === 'entered' ? 'occupied' : 'available');
+        });
+      }
+    }
+  }, [audioEnabled, spaceOccupancyHistory]);
+
+  // Enhanced draw parking space overlays with movement indicators
   const drawParkingOverlays = useCallback((spaces: ParkingSpace[], videoElement: HTMLVideoElement | HTMLImageElement) => {
     const canvas = overlayCanvasRef.current;
-    if (!canvas || !videoElement) return;
+    if (!canvas || !videoElement || !showOverlays) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Set canvas size to match video
+    // Get the actual display dimensions of the video element
     const rect = videoElement.getBoundingClientRect();
-    canvas.width = videoElement.videoWidth || videoElement.naturalWidth || rect.width;
-    canvas.height = videoElement.videoHeight || videoElement.naturalHeight || rect.height;
+    const displayWidth = rect.width;
+    const displayHeight = rect.height;
+
+    // Get the natural dimensions of the video/image
+    const naturalWidth = videoElement instanceof HTMLVideoElement 
+      ? videoElement.videoWidth 
+      : videoElement.naturalWidth;
+    const naturalHeight = videoElement instanceof HTMLVideoElement 
+      ? videoElement.videoHeight 
+      : videoElement.naturalHeight;
+
+    if (naturalWidth === 0 || naturalHeight === 0) {
+      console.warn('Video/image not ready for overlay drawing');
+      return;
+    }
+
+    // Set canvas size to match the display size
+    canvas.width = displayWidth;
+    canvas.height = displayHeight;
+
+    // Calculate scaling factors
+    const scaleX = displayWidth / naturalWidth;
+    const scaleY = displayHeight / naturalHeight;
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw each parking space
+    // Draw each parking space with proper scaling
     spaces.forEach((space, index) => {
       const { region, isOccupied, confidence, vehicleType, features } = space;
       
-      // Calculate color based on occupancy and confidence
-      const alpha = Math.max(0.6, confidence);
-      const color = isOccupied 
-        ? `rgba(239, 68, 68, ${alpha})` 
-        : `rgba(34, 197, 94, ${alpha})`;
+      // Check if this space has recent movement
+      const hasRecentMovement = recentMovements.some(m => m.spaceId === space.id);
+      const recentMovement = recentMovements.find(m => m.spaceId === space.id);
       
-      // Draw region outline
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color.replace(/[\d\.]+\)$/, '0.2)');
-      ctx.lineWidth = isOccupied ? 4 : 3;
-      ctx.setLineDash([]);
+      // Calculate color based on occupancy and confidence with better visibility
+      const baseAlpha = Math.max(0.7, confidence);
+      const strokeAlpha = Math.max(0.9, confidence);
+      
+      let fillColor = isOccupied 
+        ? `rgba(239, 68, 68, ${baseAlpha * 0.3})` 
+        : `rgba(34, 197, 94, ${baseAlpha * 0.3})`;
+      
+      let strokeColor = isOccupied 
+        ? `rgba(239, 68, 68, ${strokeAlpha})` 
+        : `rgba(34, 197, 94, ${strokeAlpha})`;
 
-      // Draw the parking space polygon
+      // Highlight spaces with recent movement
+      if (hasRecentMovement) {
+        fillColor = `rgba(255, 165, 0, ${baseAlpha * 0.5})`;
+        strokeColor = `rgba(255, 165, 0, ${strokeAlpha})`;
+      }
+      
+      // Set drawing styles
+      ctx.strokeStyle = strokeColor;
+      ctx.fillStyle = fillColor;
+      ctx.lineWidth = hasRecentMovement ? 5 : (isOccupied ? 4 : 3);
+      ctx.setLineDash(hasRecentMovement ? [10, 5] : []);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Draw the parking space polygon with scaling
       if (region.points.length > 0) {
         ctx.beginPath();
-        ctx.moveTo(region.points[0].x, region.points[0].y);
+        
+        // Scale the first point
+        const firstPoint = {
+          x: region.points[0].x * scaleX,
+          y: region.points[0].y * scaleY
+        };
+        ctx.moveTo(firstPoint.x, firstPoint.y);
+        
+        // Scale and draw all other points
         region.points.forEach(point => {
-          ctx.lineTo(point.x, point.y);
+          const scaledPoint = {
+            x: point.x * scaleX,
+            y: point.y * scaleY
+          };
+          ctx.lineTo(scaledPoint.x, scaledPoint.y);
         });
+        
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
       }
 
-      // Calculate bounds for text placement
-      const xs = region.points.map(p => p.x);
-      const ys = region.points.map(p => p.y);
+      // Calculate bounds for text placement (scaled)
+      const xs = region.points.map(p => p.x * scaleX);
+      const ys = region.points.map(p => p.y * scaleY);
       const minX = Math.min(...xs);
       const minY = Math.min(...ys);
       const maxX = Math.max(...xs);
       const maxY = Math.max(...ys);
+      const width = maxX - minX;
+      const height = maxY - minY;
 
-      // Draw space label
-      if (canvasSettings.showLabels) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-        ctx.fillRect(minX + 5, minY + 5, 80, 25);
-        
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 14px Arial';
-        ctx.textAlign = 'left';
-        ctx.fillText(`P${index + 1}`, minX + 10, minY + 22);
+      // Only draw labels if the region is large enough
+      if (width > 60 && height > 40) {
+        // Draw space label background
+        if (canvasSettings.showLabels) {
+          const labelWidth = 80;
+          const labelHeight = 25;
+          
+          ctx.fillStyle = hasRecentMovement ? 'rgba(255, 165, 0, 0.9)' : 'rgba(0, 0, 0, 0.8)';
+          ctx.fillRect(minX + 5, minY + 5, labelWidth, labelHeight);
+          
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`P${index + 1}`, minX + 10, minY + 17);
+        }
+
+        // Draw confidence percentage
+        if (canvasSettings.showConfidence && width > 80) {
+          const confWidth = 60;
+          const confHeight = 20;
+          
+          ctx.fillStyle = hasRecentMovement ? 'rgba(255, 165, 0, 0.9)' : 'rgba(0, 0, 0, 0.8)';
+          ctx.fillRect(minX + 5, minY + 35, confWidth, confHeight);
+          
+          ctx.fillStyle = 'white';
+          ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`${Math.round(confidence * 100)}%`, minX + 10, minY + 45);
+        }
+
+        // Draw vehicle type if available and space is large enough
+        if (vehicleType && isOccupied && width > 100 && height > 80) {
+          const vehicleWidth = 100;
+          const vehicleHeight = 20;
+          
+          ctx.fillStyle = hasRecentMovement ? 'rgba(255, 165, 0, 0.9)' : 'rgba(0, 0, 0, 0.8)';
+          ctx.fillRect(minX + 5, minY + 60, vehicleWidth, vehicleHeight);
+          
+          ctx.fillStyle = 'white';
+          ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          const vehicleText = vehicleType.length > 12 ? vehicleType.substring(0, 12) + '...' : vehicleType;
+          ctx.fillText(vehicleText, minX + 10, minY + 70);
+        }
+
+        // Draw stability indicator (small circle in corner)
+        if (width > 50) {
+          const stabilityColor = features.stabilityScore > 0.7 
+            ? '#10b981' 
+            : features.stabilityScore > 0.4 
+            ? '#f59e0b' 
+            : '#ef4444';
+          
+          ctx.fillStyle = stabilityColor;
+          ctx.beginPath();
+          ctx.arc(maxX - 10, minY + 15, 4, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Add white border for better visibility
+          ctx.strokeStyle = 'white';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+
+        // Draw movement indicator for recent movements
+        if (hasRecentMovement && recentMovement) {
+          const movementWidth = 90;
+          const movementHeight = 25;
+          
+          ctx.fillStyle = 'rgba(255, 165, 0, 0.95)';
+          ctx.fillRect(minX + 5, minY + 85, movementWidth, movementHeight);
+          
+          // Draw movement arrow
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          
+          const movementText = recentMovement.action === 'entered' ? '→ ENTERED' : '← EXITED';
+          ctx.fillText(movementText, minX + 10, minY + 97);
+
+          // Show duration for exited vehicles
+          if (recentMovement.action === 'exited' && recentMovement.duration) {
+            const durationMinutes = Math.round(recentMovement.duration / 60000);
+            ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            ctx.fillText(`${durationMinutes}min`, minX + 10, minY + 110);
+          }
+        }
       }
 
-      // Draw confidence percentage
-      if (canvasSettings.showConfidence) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-        ctx.fillRect(minX + 5, minY + 35, 60, 20);
-        
-        ctx.fillStyle = 'white';
-        ctx.font = '12px Arial';
-        ctx.fillText(`${Math.round(confidence * 100)}%`, minX + 10, minY + 48);
-      }
-
-      // Draw vehicle type if available
-      if (vehicleType && isOccupied) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-        ctx.fillRect(minX + 5, minY + 60, 100, 20);
-        
-        ctx.fillStyle = 'white';
-        ctx.font = '11px Arial';
-        const vehicleText = vehicleType.length > 12 ? vehicleType.substring(0, 12) + '...' : vehicleType;
-        ctx.fillText(vehicleText, minX + 10, minY + 73);
-      }
-
-      // Draw stability indicator
-      const stabilityColor = features.stabilityScore > 0.7 
-        ? '#10b981' 
-        : features.stabilityScore > 0.4 
-        ? '#f59e0b' 
-        : '#ef4444';
-      
-      ctx.fillStyle = stabilityColor;
-      ctx.beginPath();
-      ctx.arc(maxX - 10, minY + 15, 4, 0, Math.PI * 2);
-      ctx.fill();
+      // Reset line dash
+      ctx.setLineDash([]);
     });
-  }, [canvasSettings.showLabels, canvasSettings.showConfidence]);
+
+    // Draw detection status overlay
+    if (isStreaming && spaces.length > 0) {
+      const occupied = spaces.filter(s => s.isOccupied).length;
+      const available = spaces.filter(s => !s.isOccupied).length;
+      
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.fillRect(10, canvas.height - 100, 250, 90);
+      
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(`Available: ${available} | Occupied: ${occupied}`, 20, canvas.height - 90);
+      
+      const occupancyRate = Math.round((occupied / spaces.length) * 100);
+      ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.fillText(`Occupancy: ${occupancyRate}%`, 20, canvas.height - 70);
+      
+      // Show recent movements count
+      if (recentMovements.length > 0) {
+        ctx.fillStyle = 'rgba(255, 165, 0, 0.9)';
+        ctx.fillText(`Recent movements: ${recentMovements.length}`, 20, canvas.height - 50);
+      }
+
+      // Show detection mode
+      ctx.fillStyle = 'rgba(100, 200, 255, 0.9)';
+      ctx.fillText(`Mode: ${detectionMode === 'reference' ? 'Reference-based' : 'Live tracking'}`, 20, canvas.height - 30);
+    }
+  }, [canvasSettings.showLabels, canvasSettings.showConfidence, canvasSettings.animateChanges, showOverlays, isStreaming, recentMovements, detectionMode]);
 
   // Enhanced video loading with better error handling
   const loadVideo = useCallback(async (file: File): Promise<boolean> => {
@@ -443,11 +716,6 @@ const LiveDetection: React.FC = () => {
           cleanup();
           reject(new Error('Invalid video dimensions'));
           return;
-        }
-        
-        if (overlayCanvasRef.current) {
-          overlayCanvasRef.current.width = video.videoWidth;
-          overlayCanvasRef.current.height = video.videoHeight;
         }
         
         setVideoStatus('Metadata Loaded');
@@ -810,9 +1078,12 @@ const LiveDetection: React.FC = () => {
 
     const onTimeUpdate = () => {
       updateStatus();
-      // Update overlay when video time changes
+      // Trigger overlay redraw when video time changes
       if (detectionResults && detectionResults.spaces.length > 0) {
-        drawParkingOverlays(detectionResults.spaces, video);
+        // Use requestAnimationFrame for smooth overlay updates
+        requestAnimationFrame(() => {
+          drawParkingOverlays(detectionResults.spaces, video);
+        });
       }
     };
 
@@ -839,12 +1110,19 @@ const LiveDetection: React.FC = () => {
       console.log('Video ended');
       setVideoCompleted(true);
       setVideoStatus('Ended');
+      
+      // Continue detection on the last frame for a few more cycles
+      if (detectionActiveRef.current) {
+        console.log('Video ended but continuing detection on final frame');
+      }
     };
 
     const onSeeked = () => {
       console.log('Video seeked to:', video.currentTime);
       if (detectionResults && detectionResults.spaces.length > 0) {
-        drawParkingOverlays(detectionResults.spaces, video);
+        requestAnimationFrame(() => {
+          drawParkingOverlays(detectionResults.spaces, video);
+        });
       }
     };
 
@@ -916,6 +1194,9 @@ const LiveDetection: React.FC = () => {
         setVideoCompleted(false);
         setLastDetectionResult(null);
         setDetectionHistory([]);
+        setVehicleMovements([]);
+        setRecentMovements([]);
+        setSpaceOccupancyHistory(new Map());
         setTotalDetections(0);
         setChangesDetected(0);
         setIsStreaming(false);
@@ -925,6 +1206,8 @@ const LiveDetection: React.FC = () => {
         setError(null);
         videoElementReadyRef.current = false;
         lastVideoTimeRef.current = -1;
+        detectionActiveRef.current = false;
+        previousSpacesRef.current = [];
 
         // Reset video health
         setVideoHealth({
@@ -939,6 +1222,7 @@ const LiveDetection: React.FC = () => {
         // Set video mode
         setVideoFile(file);
         setIsVideoMode(true);
+        setDetectionMode('live');
 
         // Wait for next tick to ensure video element is ready
         setTimeout(async () => {
@@ -972,11 +1256,41 @@ const LiveDetection: React.FC = () => {
         if (event.target?.result) {
           setReferenceImage(event.target.result as string);
           setShowRegionSelector(true);
+          setRegionsApplied(false);
+          setDetectionMode('reference');
         }
       };
       reader.readAsDataURL(file);
     }
   };
+
+  // Apply regions from reference image and auto-start detection
+  const applyRegions = useCallback(async () => {
+    setShowRegionSelector(false);
+    setRegionsApplied(true);
+    
+    // Create initial spaces for display
+    if (regions.length > 0) {
+      const initialSpaces = createInitialSpaces(regions);
+      setDetectionResults({
+        total: initialSpaces.length,
+        occupied: 0,
+        available: initialSpaces.length,
+        spaces: initialSpaces,
+        timestamp: Date.now() / 1000
+      });
+
+      // Auto-start detection if enabled and source is ready
+      if (autoStartEnabled && ((isVideoMode && videoElementReadyRef.current) || (!isVideoMode && hasCamera))) {
+        console.log('Auto-starting detection after regions applied');
+        
+        // Small delay to ensure UI updates
+        setTimeout(() => {
+          startDetection();
+        }, 500);
+      }
+    }
+  }, [regions, createInitialSpaces, isVideoMode, hasCamera, autoStartEnabled]);
 
   // Start camera stream
   const startCamera = async () => {
@@ -992,6 +1306,7 @@ const LiveDetection: React.FC = () => {
       setIsVideoMode(false);
       setIsVideoReady(true);
       videoElementReadyRef.current = true;
+      setDetectionMode('live');
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -1006,8 +1321,16 @@ const LiveDetection: React.FC = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         streamRef.current = stream;
-        setIsStreaming(true);
+        setIsStreaming(false); // Don't auto-start, wait for regions
         setVideoStatus('Camera Active');
+        
+        // Auto-start detection if regions are already applied
+        if (autoStartEnabled && regionsApplied && regions.length > 0) {
+          console.log('Auto-starting detection with camera');
+          setTimeout(() => {
+            startDetection();
+          }, 1000); // Give camera time to initialize
+        }
       }
     } catch (err) {
       console.error('Camera access error:', err);
@@ -1068,10 +1391,13 @@ const LiveDetection: React.FC = () => {
     setNextDetectionTime(null);
     setDetectionCountdown(0);
     setVideoStatus('Stopped');
+    setRecentMovements([]);
     processingRef.current = false;
     recoveryInProgressRef.current = false;
     videoElementReadyRef.current = false;
     lastVideoTimeRef.current = -1;
+    detectionActiveRef.current = false;
+    previousSpacesRef.current = [];
   };
   
   // Capture frame for processing
@@ -1109,7 +1435,7 @@ const LiveDetection: React.FC = () => {
     }
   }, []);
   
-  // Enhanced detection function with better error handling
+  // Enhanced detection function with better error handling and immediate overlay updates
   const runDetection = useCallback(async () => {
     const currentIsStreaming = isStreamingRef.current;
     const currentIsPaused = isPausedRef.current;
@@ -1117,12 +1443,13 @@ const LiveDetection: React.FC = () => {
     const currentIsVideoMode = isVideoModeRef.current;
     const currentVideoCompleted = videoCompletedRef.current;
     const currentLastDetectionResult = lastDetectionResultRef.current;
+    const currentRegionsApplied = regionsAppliedRef.current;
 
     if (!currentIsStreaming || currentIsPaused || processingRef.current) return;
-    if (currentRegions.length === 0) return;
+    if (currentRegions.length === 0 || !currentRegionsApplied) return;
 
-    // Skip detection if video is unhealthy
-    if (currentIsVideoMode && !videoHealth.isHealthy) {
+    // Skip detection if video is unhealthy (but allow if video has ended)
+    if (currentIsVideoMode && !videoHealth.isHealthy && !currentVideoCompleted) {
       console.log('Skipping detection due to unhealthy video');
       return;
     }
@@ -1134,16 +1461,15 @@ const LiveDetection: React.FC = () => {
       let imageSource: string | HTMLVideoElement;
 
       if (currentIsVideoMode && videoRef.current) {
-        if (!videoElementReadyRef.current || videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        if (!videoElementReadyRef.current || 
+            (videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA && !currentVideoCompleted)) {
           console.log('Video not ready for detection, skipping frame');
           return;
         }
 
-        const isVideoEnded = videoRef.current.ended || 
-          (videoRef.current.duration > 0 && videoRef.current.currentTime >= videoRef.current.duration);
-
-        if (isVideoEnded && !currentVideoCompleted) {
-          setVideoCompleted(true);
+        // For ended videos, continue processing the last frame
+        if (currentVideoCompleted) {
+          console.log('Processing final frame of completed video');
         }
 
         imageSource = videoRef.current;
@@ -1159,7 +1485,10 @@ const LiveDetection: React.FC = () => {
       }
 
       const startTime = performance.now();
-      const results = await detectParkingSpaces(imageSource, currentRegions, []);
+      
+      // Pass previous spaces for temporal consistency
+      const previousSpaces = previousSpacesRef.current;
+      const results = await detectParkingSpaces(imageSource, currentRegions, previousSpaces);
       const processingTime = performance.now() - startTime;
 
       const timestamp = Date.now() / 1000;
@@ -1176,16 +1505,26 @@ const LiveDetection: React.FC = () => {
         }
       }
 
-      setDetectionResults({
+      // Track vehicle movements
+      trackVehicleMovements(results.spaces, previousSpaces);
+
+      // Update detection results immediately
+      const newResults = {
         ...results,
         timestamp,
         processingTime
-      });
+      };
+      
+      setDetectionResults(newResults);
+      previousSpacesRef.current = results.spaces;
 
-      // Draw overlays immediately after detection
+      // Draw overlays immediately after detection with the new results
       const videoElement = currentIsVideoMode ? videoRef.current : webcamRef.current?.video;
       if (videoElement && results.spaces.length > 0) {
-        drawParkingOverlays(results.spaces, videoElement);
+        // Use requestAnimationFrame for smooth updates
+        requestAnimationFrame(() => {
+          drawParkingOverlays(results.spaces, videoElement);
+        });
       }
 
       setDetectionHistory(prev => [
@@ -1233,7 +1572,7 @@ const LiveDetection: React.FC = () => {
       processingRef.current = false;
       setIsProcessing(false);
     }
-  }, [audioEnabled, videoHealth.isHealthy, drawParkingOverlays]);
+  }, [audioEnabled, videoHealth.isHealthy, drawParkingOverlays, trackVehicleMovements]);
   
   // Play notification sound
   const playNotificationSound = useCallback((type: 'occupied' | 'available') => {
@@ -1277,10 +1616,10 @@ const LiveDetection: React.FC = () => {
     }
   }, [nextDetectionTime]);
   
-  // Start detection
+  // Start detection with improved timing
   const startDetection = useCallback(async () => {
-    if (regions.length === 0) {
-      setError('Please define at least one parking region before starting detection');
+    if (regions.length === 0 || !regionsApplied) {
+      setError('Please define and apply parking regions before starting detection');
       return;
     }
 
@@ -1301,6 +1640,11 @@ const LiveDetection: React.FC = () => {
     setLastDetectionResult(null);
     setTotalDetections(0);
     setChangesDetected(0);
+    setVehicleMovements([]);
+    setRecentMovements([]);
+    setSpaceOccupancyHistory(new Map());
+    detectionActiveRef.current = true;
+    previousSpacesRef.current = [];
 
     // Clear any existing intervals
     if (detectionIntervalRef.current) {
@@ -1315,8 +1659,10 @@ const LiveDetection: React.FC = () => {
 
     if (isVideoMode && videoRef.current) {
       try {
+        // Reset video to beginning if it has ended
         if (videoRef.current.ended || videoRef.current.currentTime >= videoRef.current.duration) {
           videoRef.current.currentTime = 0;
+          setVideoCompleted(false);
         }
 
         await videoRef.current.play();
@@ -1327,6 +1673,7 @@ const LiveDetection: React.FC = () => {
         console.error('Video playback failed:', e);
         setError('Failed to play video. Please try again or check the video format.');
         setIsStreaming(false);
+        detectionActiveRef.current = false;
         return;
       }
     }
@@ -1335,33 +1682,15 @@ const LiveDetection: React.FC = () => {
     if (regions.length > 0) {
       const videoElement = isVideoMode ? videoRef.current : webcamRef.current?.video;
       if (videoElement) {
-        const initialSpaces: ParkingSpace[] = regions.map((region, index) => ({
-          id: index,
-          region,
-          isOccupied: false,
-          confidence: 0,
-          lastStateChange: Date.now(),
-          stateHistory: [],
-          features: {
-            nonZeroCount: 0,
-            brightness: 0,
-            edgeDensity: 0,
-            textureComplexity: 0,
-            perspectiveScore: 0,
-            heatmapScore: 0,
-            colorVariance: 0,
-            motionScore: 0,
-            shadowScore: 0,
-            stabilityScore: 0.5
-          }
-        }));
-        
-        drawParkingOverlays(initialSpaces, videoElement);
+        const initialSpaces = createInitialSpaces(regions);
+        requestAnimationFrame(() => {
+          drawParkingOverlays(initialSpaces, videoElement);
+        });
       }
     }
 
-    // Run initial detection after 1 second
-    setTimeout(runDetection, 1000);
+    // Run initial detection immediately
+    setTimeout(runDetection, 500);
 
     // Set up detection interval
     setNextDetectionTime(Date.now() + DETECTION_INTERVAL);
@@ -1374,7 +1703,7 @@ const LiveDetection: React.FC = () => {
     }
     performanceIntervalRef.current = setInterval(updatePerformanceMetrics, 1000);
 
-  }, [isVideoMode, regions, runDetection, updateCountdown, checkVideoHealth, drawParkingOverlays]);
+  }, [isVideoMode, regions, regionsApplied, runDetection, updateCountdown, checkVideoHealth, drawParkingOverlays, createInitialSpaces]);
   
   // Toggle pause
   const togglePause = useCallback(() => {
@@ -1449,7 +1778,10 @@ const LiveDetection: React.FC = () => {
     const data = {
       timestamp: new Date().toISOString(),
       videoName: videoFile?.name,
+      detectionMode,
       detectionHistory,
+      vehicleMovements,
+      spaceOccupancyHistory: Array.from(spaceOccupancyHistory.entries()),
       detectionInterval: `${DETECTION_INTERVAL / 1000} seconds`,
       totalDetections,
       changesDetected,
@@ -1476,7 +1808,7 @@ const LiveDetection: React.FC = () => {
     document.body.removeChild(link);
     
     URL.revokeObjectURL(url);
-  }, [videoFile, detectionHistory, totalDetections, changesDetected, videoCompleted, detectionResults, performanceMetrics, videoHealth, settings]);
+  }, [videoFile, detectionMode, detectionHistory, vehicleMovements, spaceOccupancyHistory, totalDetections, changesDetected, videoCompleted, detectionResults, performanceMetrics, videoHealth, settings]);
   
   // Setup video event handlers
   useEffect(() => {
@@ -1484,15 +1816,17 @@ const LiveDetection: React.FC = () => {
     return cleanupEvents;
   }, [setupVideoEventHandlers]);
 
-  // Update overlays when detection results change
+  // Update overlays when detection results change or when overlay settings change
   useEffect(() => {
     if (detectionResults && detectionResults.spaces.length > 0) {
       const videoElement = isVideoMode ? videoRef.current : webcamRef.current?.video;
       if (videoElement) {
-        drawParkingOverlays(detectionResults.spaces, videoElement);
+        requestAnimationFrame(() => {
+          drawParkingOverlays(detectionResults.spaces, videoElement);
+        });
       }
     }
-  }, [detectionResults, isVideoMode, drawParkingOverlays]);
+  }, [detectionResults, isVideoMode, drawParkingOverlays, showOverlays]);
 
   // Initialize on mount
   useEffect(() => {
@@ -1557,6 +1891,29 @@ const LiveDetection: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-1 sm:gap-2">
+          <div className={`px-2 py-1 rounded-lg text-xs ${
+            detectionMode === 'reference' 
+              ? 'bg-blue-600 text-white' 
+              : 'bg-green-600 text-white'
+          }`}>
+            {detectionMode === 'reference' ? 'Reference Mode' : 'Live Mode'}
+          </div>
+          
+          <button
+            onClick={() => setAutoStartEnabled(!autoStartEnabled)}
+            className={`px-2 sm:px-3 py-1 sm:py-2 rounded-lg transition-colors text-xs sm:text-sm ${
+              autoStartEnabled
+                ? 'bg-blue-600 text-white'
+                : settings.enableDarkMode
+                ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+            title="Auto-start detection when regions are applied"
+          >
+            <Zap size={14} className="inline mr-1" />
+            Auto-Start
+          </button>
+          
           <button
             onClick={() => setShowSettings(!showSettings)}
             className={`p-1.5 sm:p-2 rounded-lg transition-colors ${
@@ -1605,6 +1962,40 @@ const LiveDetection: React.FC = () => {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Auto-Start Status */}
+      {autoStartEnabled && regionsApplied && regions.length > 0 && !isStreaming && (
+        <div className="p-2 sm:p-3 bg-blue-500 bg-opacity-20 border border-blue-500 text-blue-500 rounded-lg flex items-center gap-2">
+          <Zap size={16} />
+          <span className="text-sm">
+            Auto-start enabled - Detection will begin automatically when video source is ready
+          </span>
+        </div>
+      )}
+
+      {/* Detection Mode Status */}
+      {regionsApplied && regions.length > 0 && (
+        <div className={`p-2 sm:p-3 rounded-lg flex items-center justify-between text-xs sm:text-sm ${
+          detectionMode === 'reference'
+            ? 'bg-blue-500 bg-opacity-20 border border-blue-500 text-blue-500'
+            : 'bg-green-500 bg-opacity-20 border border-green-500 text-green-500'
+        }`}>
+          <div className="flex items-center gap-1 sm:gap-2">
+            <CheckSquare size={16} />
+            <span>
+              {detectionMode === 'reference' 
+                ? `Reference-based detection with ${regions.length} defined regions`
+                : `Live tracking mode with ${regions.length} parking spaces`
+              }
+            </span>
+          </div>
+          {isStreaming && (
+            <span className="text-xs">
+              {DETECTION_INTERVAL / 1000}s interval
+            </span>
+          )}
         </div>
       )}
 
@@ -1672,7 +2063,7 @@ const LiveDetection: React.FC = () => {
             )}
             <span>
               {videoCompleted
-                ? `Video Completed - Monitoring Last Frame (${DETECTION_INTERVAL / 1000}s interval)`
+                ? `Video Completed - Monitoring Final Frame (${DETECTION_INTERVAL / 1000}s interval)`
                 : `Detection Active - Running every ${DETECTION_INTERVAL / 1000} seconds`}
             </span>
           </div>
@@ -1681,6 +2072,29 @@ const LiveDetection: React.FC = () => {
               Next: {detectionCountdown}s
             </span>
           )}
+        </div>
+      )}
+
+      {/* Recent Vehicle Movements */}
+      {recentMovements.length > 0 && (
+        <div className="p-2 sm:p-3 bg-orange-500 bg-opacity-20 border border-orange-500 text-orange-600 rounded-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <Users size={16} />
+            <span className="font-medium text-sm">Recent Vehicle Movements</span>
+          </div>
+          <div className="space-y-1">
+            {recentMovements.map((movement, index) => (
+              <div key={index} className="flex items-center gap-2 text-xs">
+                <Car size={12} />
+                <span>
+                  Space P{movement.spaceId + 1}: Vehicle {movement.action} 
+                  {movement.vehicleType && ` (${movement.vehicleType})`}
+                  - {Math.round(movement.confidence * 100)}% confidence
+                  {movement.duration && ` - ${Math.round(movement.duration / 60000)}min stay`}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1695,12 +2109,14 @@ const LiveDetection: React.FC = () => {
                 {!referenceImage && (
                   <label className="px-2 sm:px-3 py-1 sm:py-2 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700 transition-colors text-xs sm:text-sm">
                     <input
+                      ref={referenceInputRef}
                       type="file"
                       accept="image/*"
                       onChange={handleReferenceImageUpload}
                       className="hidden"
                     />
-                    Reference Image
+                    <ImageIcon size={14} className="inline mr-1" />
+                    Reference
                   </label>
                 )}
                 <button
@@ -1751,12 +2167,28 @@ const LiveDetection: React.FC = () => {
                   imageUrl={referenceImage}
                   onRegionsChange={setRegions}
                 />
-                <div className="mt-4 flex justify-end">
+                <div className="mt-4 flex justify-end gap-2">
                   <button
-                    onClick={() => setShowRegionSelector(false)}
-                    className="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg text-sm sm:text-base"
+                    onClick={() => {
+                      setShowRegionSelector(false);
+                      setReferenceImage(null);
+                      setRegions([]);
+                      setRegionsApplied(false);
+                    }}
+                    className="px-3 sm:px-4 py-2 bg-gray-600 text-white rounded-lg text-sm sm:text-base"
                   >
-                    Apply Regions ({regions.length} defined)
+                    Cancel
+                  </button>
+                  <button
+                    onClick={applyRegions}
+                    disabled={regions.length === 0}
+                    className={`px-3 sm:px-4 py-2 rounded-lg text-sm sm:text-base ${
+                      regions.length > 0
+                        ? 'bg-blue-600 text-white hover:bg-blue-700'
+                        : 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                    }`}
+                  >
+                    Apply & {autoStartEnabled ? 'Auto-Start' : 'Ready'} ({regions.length} regions)
                   </button>
                 </div>
               </div>
@@ -1778,7 +2210,7 @@ const LiveDetection: React.FC = () => {
                       {/* Overlay Canvas for Parking Spaces */}
                       <canvas
                         ref={overlayCanvasRef}
-                        className="absolute inset-0 pointer-events-none w-full h-full object-contain"
+                        className="absolute inset-0 pointer-events-none w-full h-full"
                         style={{ 
                           mixBlendMode: 'normal',
                           opacity: showOverlays ? 1 : 0,
@@ -1873,7 +2305,7 @@ const LiveDetection: React.FC = () => {
                     {/* Overlay Canvas for Camera */}
                     <canvas
                       ref={overlayCanvasRef}
-                      className="absolute inset-0 pointer-events-none w-full h-full object-contain"
+                      className="absolute inset-0 pointer-events-none w-full h-full"
                       style={{ 
                         mixBlendMode: 'normal',
                         opacity: showOverlays ? 1 : 0,
@@ -1955,21 +2387,6 @@ const LiveDetection: React.FC = () => {
                         <span>{performanceMetrics.fps.toFixed(1)} FPS</span>
                       </div>
                     </div>
-                    
-                    {detectionResults && (
-                      <div className="absolute bottom-2 sm:bottom-4 left-2 sm:left-4 px-2 sm:px-3 py-1 sm:py-2 bg-black bg-opacity-70 rounded-lg text-white text-xs sm:text-sm">
-                        <div className="flex items-center gap-2 sm:gap-4">
-                          <div className="flex items-center gap-1">
-                            <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-green-500 rounded-full"></div>
-                            <span>{detectionResults.available} Available</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-red-500 rounded-full"></div>
-                            <span>{detectionResults.occupied} Occupied</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
                   </>
                 )}
               </div>
@@ -1997,9 +2414,9 @@ const LiveDetection: React.FC = () => {
               ) : (
                 <button
                   onClick={startDetection}
-                  disabled={(!hasCamera && !videoFile) || regions.length === 0 || (isVideoMode && !videoElementReadyRef.current)}
+                  disabled={(!hasCamera && !videoFile) || regions.length === 0 || !regionsApplied || (isVideoMode && !videoElementReadyRef.current)}
                   className={`px-2 sm:px-3 lg:px-4 py-1.5 sm:py-2 text-white rounded-lg flex items-center transition-colors text-xs sm:text-sm ${
-                    (hasCamera || (videoFile && videoElementReadyRef.current)) && regions.length > 0
+                    (hasCamera || (videoFile && videoElementReadyRef.current)) && regions.length > 0 && regionsApplied
                       ? 'bg-blue-600 hover:bg-blue-700'
                       : 'bg-gray-400 cursor-not-allowed'
                   }`}
@@ -2073,22 +2490,8 @@ const LiveDetection: React.FC = () => {
               >
                 <Camera size={14} />
               </button>
-              
-              <button
-                onClick={() => setShowRegionSelector(!showRegionSelector)}
-                className={`p-1.5 sm:p-2 rounded-lg transition-colors ${
-                  showRegionSelector 
-                    ? 'bg-blue-600 text-white' 
-                    : settings.enableDarkMode 
-                      ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' 
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-                title="Define Regions"
-              >
-                <Target size={14} />
-              </button>
 
-              {detectionHistory.length > 0 && (
+              {(detectionHistory.length > 0 || vehicleMovements.length > 0) && (
                 <button
                   onClick={exportDetectionData}
                   className="px-2 sm:px-3 lg:px-4 py-1.5 sm:py-2 bg-green-600 text-white rounded-lg flex items-center hover:bg-green-700 transition-colors text-xs sm:text-sm"
@@ -2122,47 +2525,86 @@ const LiveDetection: React.FC = () => {
                 </button>
               </div>
 
+              {/* Region Status Indicator */}
+              {regionsApplied && regions.length > 0 && (
+                <div className={`mb-3 sm:mb-4 p-2 sm:p-3 rounded-lg border ${
+                  settings.enableDarkMode 
+                    ? 'border-green-600 bg-green-900/20 text-green-400' 
+                    : 'border-green-500 bg-green-50 text-green-700'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <MapPin size={16} />
+                    <span className="text-sm font-medium">
+                      {regions.length} parking region{regions.length !== 1 ? 's' : ''} defined and applied
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs opacity-80">
+                    {isStreaming ? 'Detection active' : autoStartEnabled ? 'Auto-start ready' : 'Ready for detection'}
+                  </div>
+                </div>
+              )}
+
               {showCanvas ? (
                 <>
-                  <ParkingSpaceCanvas
-                    spaces={detectionResults?.spaces || []}
-                    width={isMobile ? 280 : isTablet ? 320 : 350}
-                    height={isMobile ? 200 : isTablet ? 240 : 280}
-                    showLabels={canvasSettings.showLabels}
-                    showConfidence={canvasSettings.showConfidence}
-                    animateChanges={canvasSettings.animateChanges}
-                  />
+                  {regionsApplied && regions.length > 0 ? (
+                    <ParkingSpaceCanvas
+                      spaces={detectionResults?.spaces || createInitialSpaces(regions)}
+                      width={isMobile ? 280 : isTablet ? 320 : 350}
+                      height={isMobile ? 200 : isTablet ? 240 : 280}
+                      showLabels={canvasSettings.showLabels}
+                      showConfidence={canvasSettings.showConfidence}
+                      animateChanges={canvasSettings.animateChanges}
+                    />
+                  ) : (
+                    <div className="py-6 sm:py-8 text-center">
+                      <Layers size={32} className="mx-auto mb-4 text-gray-400" />
+                      <p className={`text-sm sm:text-base ${settings.enableDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                        {regions.length === 0 
+                          ? 'No parking regions defined'
+                          : 'Regions defined but not applied'
+                        }
+                      </p>
+                      <p className={`text-xs sm:text-sm mt-1 ${settings.enableDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        {regions.length === 0 
+                          ? 'Upload a reference image to define parking spaces'
+                          : 'Apply regions to see parking status'
+                        }
+                      </p>
+                    </div>
+                  )}
 
                   {/* Canvas Controls */}
-                  <div className="mt-3 sm:mt-4 space-y-2">
-                    <div className="flex items-center justify-between text-xs sm:text-sm">
-                      <span>Show Labels</span>
-                      <input
-                        type="checkbox"
-                        checked={canvasSettings.showLabels}
-                        onChange={(e) => setCanvasSettings(prev => ({ ...prev, showLabels: e.target.checked }))}
-                        className="w-3 h-3 sm:w-4 sm:h-4"
-                      />
+                  {regionsApplied && regions.length > 0 && (
+                    <div className="mt-3 sm:mt-4 space-y-2">
+                      <div className="flex items-center justify-between text-xs sm:text-sm">
+                        <span>Show Labels</span>
+                        <input
+                          type="checkbox"
+                          checked={canvasSettings.showLabels}
+                          onChange={(e) => setCanvasSettings(prev => ({ ...prev, showLabels: e.target.checked }))}
+                          className="w-3 h-3 sm:w-4 sm:h-4"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-xs sm:text-sm">
+                        <span>Show Confidence</span>
+                        <input
+                          type="checkbox"
+                          checked={canvasSettings.showConfidence}
+                          onChange={(e) => setCanvasSettings(prev => ({ ...prev, showConfidence: e.target.checked }))}
+                          className="w-3 h-3 sm:w-4 sm:h-4"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-xs sm:text-sm">
+                        <span>Animate Changes</span>
+                        <input
+                          type="checkbox"
+                          checked={canvasSettings.animateChanges}
+                          onChange={(e) => setCanvasSettings(prev => ({ ...prev, animateChanges: e.target.checked }))}
+                          className="w-3 h-3 sm:w-4 sm:h-4"
+                        />
+                      </div>
                     </div>
-                    <div className="flex items-center justify-between text-xs sm:text-sm">
-                      <span>Show Confidence</span>
-                      <input
-                        type="checkbox"
-                        checked={canvasSettings.showConfidence}
-                        onChange={(e) => setCanvasSettings(prev => ({ ...prev, showConfidence: e.target.checked }))}
-                        className="w-3 h-3 sm:w-4 sm:h-4"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between text-xs sm:text-sm">
-                      <span>Animate Changes</span>
-                      <input
-                        type="checkbox"
-                        checked={canvasSettings.animateChanges}
-                        onChange={(e) => setCanvasSettings(prev => ({ ...prev, animateChanges: e.target.checked }))}
-                        className="w-3 h-3 sm:w-4 sm:h-4"
-                      />
-                    </div>
-                  </div>
+                  )}
                 </>
               ) : (
                 <div className="py-6 sm:py-8 text-center">
@@ -2209,6 +2651,53 @@ const LiveDetection: React.FC = () => {
                 />
               </div>
 
+              {/* Vehicle Movement Summary */}
+              {vehicleMovements.length > 0 && (
+                <div className="mt-4 sm:mt-6">
+                  <h3 className="font-medium mb-2 text-sm sm:text-base">Vehicle Movements</h3>
+                  <div className={`p-2 sm:p-3 rounded-lg border ${
+                    settings.enableDarkMode 
+                      ? 'border-gray-600 bg-gray-700' 
+                      : 'border-gray-300 bg-gray-50'
+                  }`}>
+                    <div className="space-y-1 sm:space-y-2 text-xs sm:text-sm">
+                      <div className="flex justify-between">
+                        <span>Total Movements:</span>
+                        <span className="text-orange-500">{vehicleMovements.length}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Vehicles Entered:</span>
+                        <span className="text-red-500">
+                          {vehicleMovements.filter(m => m.action === 'entered').length}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Vehicles Exited:</span>
+                        <span className="text-green-500">
+                          {vehicleMovements.filter(m => m.action === 'exited').length}
+                        </span>
+                      </div>
+                      {recentMovements.length > 0 && (
+                        <div className="flex justify-between">
+                          <span>Recent (5s):</span>
+                          <span className="text-orange-500">{recentMovements.length}</span>
+                        </div>
+                      )}
+                      {spaceOccupancyHistory.size > 0 && (
+                        <div className="flex justify-between">
+                          <span>Avg Stay Time:</span>
+                          <span className="text-blue-500">
+                            {Math.round(Array.from(spaceOccupancyHistory.values())
+                              .filter(h => h.totalOccupiedTime > 0)
+                              .reduce((sum, h) => sum + h.totalOccupiedTime / h.occupancyCount, 0) / 60000)}min
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Detection Status */}
               <div className="mt-4 sm:mt-6">
                 <h3 className="font-medium mb-2 text-sm sm:text-base">Detection Status</h3>
@@ -2225,13 +2714,25 @@ const LiveDetection: React.FC = () => {
                       </span>
                     </div>
                     <div className="flex justify-between">
+                      <span>Mode:</span>
+                      <span className={detectionMode === 'reference' ? 'text-blue-500' : 'text-green-500'}>
+                        {detectionMode === 'reference' ? 'Reference' : 'Live'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
                       <span>Interval:</span>
                       <span>{DETECTION_INTERVAL / 1000}s</span>
                     </div>
                     <div className="flex justify-between">
+                      <span>Auto-Start:</span>
+                      <span className={autoStartEnabled ? 'text-green-500' : 'text-gray-500'}>
+                        {autoStartEnabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
                       <span>Regions:</span>
-                      <span className={regions.length > 0 ? 'text-green-500' : 'text-red-500'}>
-                        {regions.length}
+                      <span className={regions.length > 0 && regionsApplied ? 'text-green-500' : 'text-red-500'}>
+                        {regions.length} {regionsApplied ? '(Applied)' : '(Not Applied)'}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -2355,6 +2856,55 @@ const LiveDetection: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              {/* Recent Vehicle Movements */}
+              {vehicleMovements.length > 0 && (
+                <div className="mt-4 sm:mt-6">
+                  <h3 className="font-medium mb-2 text-sm sm:text-base">
+                    Recent Movements ({vehicleMovements.slice(-5).length})
+                  </h3>
+                  <div className="space-y-1 sm:space-y-2">
+                    {vehicleMovements.slice(-5).map((movement, index) => (
+                      <div
+                        key={index}
+                        className={`p-2 rounded-lg text-xs sm:text-sm ${
+                          movement.action === 'entered'
+                            ? 'bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+                            : 'bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            {movement.action === 'entered' ? (
+                              <ArrowRight size={12} />
+                            ) : (
+                              <ArrowLeft size={12} />
+                            )}
+                            <span>P{movement.spaceId + 1}</span>
+                            <span className="font-medium">
+                              {movement.action === 'entered' ? 'ENTERED' : 'EXITED'}
+                            </span>
+                          </div>
+                          <span className="text-xs opacity-75">
+                            {new Date(movement.timestamp).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-xs opacity-75">
+                          <div>
+                            {movement.vehicleType && (
+                              <span>{movement.vehicleType} • </span>
+                            )}
+                            <span>{Math.round(movement.confidence * 100)}% confidence</span>
+                          </div>
+                          {movement.duration && (
+                            <span>Stay: {Math.round(movement.duration / 60000)}min</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -2373,6 +2923,7 @@ interface ResultCardProps {
 
 const ResultCard: React.FC<ResultCardProps> = ({
   label,
+  
   value,
   darkMode,
   color = 'blue',

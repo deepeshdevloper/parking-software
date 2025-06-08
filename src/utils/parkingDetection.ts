@@ -13,7 +13,7 @@ const CONFIG = {
   COLOR_VARIANCE_THRESHOLD: 0.3,          // Increased for better color differentiation
   MIN_VEHICLE_CONFIDENCE: 0.65,           // Slightly reduced for better sensitivity
   PARKING_SPACE_MIN_SIZE: 50,             // Minimum size unchanged
-  MODEL_LOAD_TIMEOUT: 30000,              // Timeout unchanged
+  MODEL_LOAD_TIMEOUT: 60000,              // Increased timeout to 60 seconds
   MAX_FRAME_SKIP: 1,                      // Frame skip unchanged
   MOTION_INFLUENCE: 0.4,                  // Increased motion influence
   UNCERTAINTY_THRESHOLD: 0.4,             // Increased uncertainty threshold
@@ -60,6 +60,8 @@ let objectDetector: cocoSsd.ObjectDetection | null = null;
 let featureExtractor: mobilenet.MobileNet | null = null;
 let isModelLoading = false;
 let modelLoadingPromise: Promise<void> | null = null;
+let modelLoadAttempts = 0;
+const MAX_MODEL_LOAD_ATTEMPTS = 3;
 
 let frameCount = 0;
 let lastFrameTime = Date.now();
@@ -77,47 +79,93 @@ const settings = {
 
 async function initializeTensorFlow(): Promise<boolean> {
   try {
-    await tf.setBackend('webgl');
-    await tf.ready();
-    console.log('Using WebGL backend');
-    return true;
-  } catch (webglError) {
-    console.warn('WebGL backend failed, falling back to CPU:', webglError);
+    console.log('Initializing TensorFlow.js...');
+    
+    // Try WebGL first
     try {
-      await tf.setBackend('cpu');
+      await tf.setBackend('webgl');
       await tf.ready();
-      console.log('Using CPU backend');
+      console.log('TensorFlow.js initialized with WebGL backend');
       return true;
-    } catch (cpuError) {
-      console.error('All backends failed:', cpuError);
-      return false;
+    } catch (webglError) {
+      console.warn('WebGL backend failed, trying CPU backend:', webglError);
+      
+      // Fallback to CPU
+      try {
+        await tf.setBackend('cpu');
+        await tf.ready();
+        console.log('TensorFlow.js initialized with CPU backend');
+        return true;
+      } catch (cpuError) {
+        console.error('Both WebGL and CPU backends failed:', cpuError);
+        return false;
+      }
     }
+  } catch (error) {
+    console.error('TensorFlow.js initialization failed:', error);
+    return false;
   }
 }
 
 async function loadModels(): Promise<boolean> {
   if (isModelLoading && modelLoadingPromise) {
-    return modelLoadingPromise.then(() => true).catch(() => false);
+    try {
+      await modelLoadingPromise;
+      return objectDetector !== null && featureExtractor !== null;
+    } catch {
+      return false;
+    }
   }
 
   if (objectDetector && featureExtractor) {
+    console.log('Models already loaded');
     return true;
   }
 
+  if (modelLoadAttempts >= MAX_MODEL_LOAD_ATTEMPTS) {
+    console.error('Maximum model loading attempts reached');
+    return false;
+  }
+
   isModelLoading = true;
+  modelLoadAttempts++;
+  
   modelLoadingPromise = new Promise(async (resolve, reject) => {
     const timeoutId = setTimeout(() => {
+      console.error('Model loading timeout after', CONFIG.MODEL_LOAD_TIMEOUT, 'ms');
       reject(new Error('Model loading timeout'));
     }, CONFIG.MODEL_LOAD_TIMEOUT);
 
     try {
+      console.log(`Model loading attempt ${modelLoadAttempts}/${MAX_MODEL_LOAD_ATTEMPTS}`);
+      
+      // Initialize TensorFlow first
       if (!await initializeTensorFlow()) {
         throw new Error('TensorFlow initialization failed');
       }
 
+      console.log('Loading COCO-SSD and MobileNet models...');
+      
+      // Load models with retry logic
+      const loadWithRetry = async (modelLoader: () => Promise<any>, modelName: string, retries = 2) => {
+        for (let i = 0; i <= retries; i++) {
+          try {
+            console.log(`Loading ${modelName} (attempt ${i + 1}/${retries + 1})`);
+            const model = await modelLoader();
+            console.log(`${modelName} loaded successfully`);
+            return model;
+          } catch (error) {
+            console.warn(`${modelName} loading attempt ${i + 1} failed:`, error);
+            if (i === retries) throw error;
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+          }
+        }
+      };
+
       const [detector, extractor] = await Promise.all([
-        cocoSsd.load(),
-        mobilenet.load()
+        loadWithRetry(() => cocoSsd.load(), 'COCO-SSD'),
+        loadWithRetry(() => mobilenet.load(), 'MobileNet')
       ]);
 
       objectDetector = detector;
@@ -125,17 +173,25 @@ async function loadModels(): Promise<boolean> {
 
       clearTimeout(timeoutId);
       isModelLoading = false;
+      console.log('All models loaded successfully');
       resolve();
     } catch (error) {
       clearTimeout(timeoutId);
       isModelLoading = false;
       objectDetector = null;
       featureExtractor = null;
+      console.error('Model loading failed:', error);
       reject(error);
     }
   });
 
-  return modelLoadingPromise.then(() => true).catch(() => false);
+  try {
+    await modelLoadingPromise;
+    return true;
+  } catch (error) {
+    console.error('Model loading promise rejected:', error);
+    return false;
+  }
 }
 
 // Enhanced video readiness check
@@ -392,7 +448,10 @@ function calculateTextureComplexity(imageData: ImageData): number {
 }
 
 async function verifyWithModel(space: ParkingSpace, imageTensor: tf.Tensor3D): Promise<ParkingSpace> {
-  if (!objectDetector || !featureExtractor) return space;
+  if (!objectDetector || !featureExtractor) {
+    console.warn('Models not available for verification');
+    return space;
+  }
 
   let cropped: tf.Tensor3D | null = null;
   let cocoInput: tf.Tensor3D | null = null;
@@ -425,7 +484,7 @@ async function verifyWithModel(space: ParkingSpace, imageTensor: tf.Tensor3D): P
     });
 
     // Prepare COCO-SSD input: expects minimum 300x300, values in 0–255, dtype int32
-    const cocoInput = tf.tidy(() => {
+    cocoInput = tf.tidy(() => {
       const minSize = 300;
       const [h, w] = cropped!.shape.slice(0, 2);
       const resizeNeeded = h < minSize || w < minSize;
@@ -442,9 +501,8 @@ async function verifyWithModel(space: ParkingSpace, imageTensor: tf.Tensor3D): P
       return tf.cast(scaled, 'int32'); // required for coco-ssd
     });
 
-
     // Prepare MobileNet input: expects [224, 224, 3], values in [0, 1], dtype float32 (default)
-    const mobilenetInput = tf.tidy(() => {
+    mobilenetInput = tf.tidy(() => {
       return tf.image.resizeBilinear(cropped!, [224, 224]); // cropped! should already be float32 [0–1]
     });
 
@@ -453,8 +511,6 @@ async function verifyWithModel(space: ParkingSpace, imageTensor: tf.Tensor3D): P
       objectDetector.detect(cocoInput as tf.Tensor3D),
       featureExtractor.classify(mobilenetInput as tf.Tensor3D),
     ]);
-    cocoInput.dispose();
-    mobilenetInput.dispose();
 
     const vehicleClasses = ['car', 'truck', 'bus', 'motorcycle', 'vehicle', 'van', 'suv', 'pickup'];
     const vehiclePredictions = predictions.filter(p =>
@@ -676,8 +732,11 @@ export async function detectParkingSpaces(
       };
     }
 
-    if (!await loadModels()) {
-      throw new Error('Failed to load TensorFlow models');
+    // Load models with better error handling
+    const modelsLoaded = await loadModels();
+    if (!modelsLoaded) {
+      console.warn('Models not loaded, proceeding with basic detection');
+      // Continue with basic detection even if models fail to load
     }
 
     frameCount++;
@@ -715,6 +774,18 @@ export async function detectParkingSpaces(
 
         console.log(`Video readyState: ${img.readyState} (${stateMap[img.readyState]})`);
 
+        // Check if video has ended - stop processing to prevent infinite loop
+        if (img.ended) {
+          console.log('Video has ended, stopping detection');
+          return {
+            total: previousSpaces.length,
+            occupied: previousSpaces.filter(s => s.isOccupied).length,
+            available: previousSpaces.filter(s => !s.isOccupied).length,
+            spaces: previousSpaces,
+            processingTime: performance.now() - startTime
+          };
+        }
+
         // Check if video has sufficient data for frame extraction
         if (img.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
           console.log('Video not ready for processing, attempting to ensure readiness...');
@@ -731,11 +802,6 @@ export async function detectParkingSpaces(
         // Additional checks for video validity
         if (img.videoWidth === 0 || img.videoHeight === 0) {
           throw new Error('Video has invalid dimensions');
-        }
-
-        // Check if video is ended but still allow processing (for final frame analysis)
-        if (img.ended) {
-          console.log('Video has ended, processing final frame');
         }
 
         // Check if video is paused but has data
@@ -880,8 +946,8 @@ export async function detectParkingSpaces(
             }
           };
 
-          // Enhanced verification triggering
-          const shouldVerify = settings.useAdaptiveVerification && (
+          // Enhanced verification triggering - only if models are loaded
+          const shouldVerify = modelsLoaded && settings.useAdaptiveVerification && (
             frameCount % CONFIG.MODEL_VERIFICATION_INTERVAL === 0 ||
             (space.isOccupied && space.confidence < 0.85) ||
             (!space.isOccupied && space.confidence > CONFIG.UNCERTAINTY_THRESHOLD * 0.8) ||
@@ -1154,13 +1220,24 @@ export function cleanup() {
     featureExtractor.dispose();
     featureExtractor = null;
   }
+  // Reset model loading state
+  isModelLoading = false;
+  modelLoadingPromise = null;
+  modelLoadAttempts = 0;
 }
 
 export function updateSettings(newSettings: Partial<typeof settings>) {
   Object.assign(settings, newSettings);
 }
 
-loadModels().catch(error => {
+// Initialize models on module load with better error handling
+loadModels().then(success => {
+  if (success) {
+    console.log('Models loaded successfully on initialization');
+  } else {
+    console.warn('Initial model loading failed, will retry on first detection');
+  }
+}).catch(error => {
   console.error('Initial model loading failed:', error);
 });
 
